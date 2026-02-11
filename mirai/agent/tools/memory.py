@@ -32,6 +32,7 @@ class MemorizeTool(BaseTool):
         }
 
     async def execute(self, content: str, importance: float) -> str:
+        # 1. Archive to L3 (HDD)
         async with async_session() as session:
             trace = CognitiveTrace(
                 collaborator_id=self.collaborator_id,
@@ -42,5 +43,24 @@ class MemorizeTool(BaseTool):
             )
             session.add(trace)
             await session.commit()
+            await session.refresh(trace)
             
-        return f"Successfully archived insight with importance {importance}."
+        # 2. Index in L2 (RAM - Vector Store)
+        # For the MVP, we assume a local MockEmbeddingProvider for now
+        from mirai.agent.providers import MockEmbeddingProvider
+        from mirai.memory.vector_db import VectorStore, MemoryEntry
+        
+        embedder = MockEmbeddingProvider()
+        vector = await embedder.get_embeddings(content)
+        
+        vdb = VectorStore()
+        entry = MemoryEntry(
+            content=content,
+            metadata={"trace_id": str(trace.id)},
+            vector=vector,
+            collaborator_id=self.collaborator_id,
+            scope="manual"
+        )
+        await vdb.add_memories([entry])
+            
+        return f"Successfully archived and indexed insight with importance {importance}."
