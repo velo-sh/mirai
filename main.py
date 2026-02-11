@@ -11,30 +11,30 @@ from mirai.agent.tools.echo import EchoTool
 from contextlib import asynccontextmanager
 from mirai.db.session import init_db
 
+# Global agent instance
+agent: Optional[AgentLoop] = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global agent
     # Initialize SQLite tables
     await init_db()
+    
+    # Initialize Agent components
+    try:
+        provider = AnthropicProvider()
+        tools = [EchoTool()]
+        agent = await AgentLoop.create(
+            provider=provider,
+            tools=tools,
+            collaborator_id="01AN4Z048W7N7DF3SQ5G16CYAJ" # Mira's ULID
+        )
+        print(f"AgentLoop initialized for: {agent.name}")
+    except Exception as e:
+        print(f"Warning: Failed to initialize AgentLoop: {e}")
+        agent = None
+    
     yield
-
-app = FastAPI(title="Mirai Node", lifespan=lifespan)
-
-class ChatRequest(BaseModel):
-    message: str
-
-# Initialize Agent components
-try:
-    provider = AnthropicProvider()
-    tools = [EchoTool()]
-    agent = AgentLoop(
-        provider=provider,
-        tools=tools,
-        system_prompt="You are Mirai, an AI Collaborator. Be helpful and proactive.",
-        collaborator_id="01AN4Z048W7N7DF3SQ5G16CYAJ" # Example ULID
-    )
-except Exception as e:
-    print(f"Warning: Failed to initialize AgentLoop: {e}")
-    agent = None
 
 @app.get("/health")
 async def health_check():

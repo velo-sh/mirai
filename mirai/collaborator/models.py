@@ -8,10 +8,10 @@ class CollaboratorBase(SQLModel):
     avatar_url: Optional[str] = None
 
 class Collaborator(CollaboratorBase, table=True):
-    id: Optional[str] = Field(default=None, primary_key=True)
+    id: str = Field(primary_key=True)
 
 class CollaboratorCreate(CollaboratorBase):
-    pass
+    id: Optional[str] = None # Allow providing a ULID or generate one
 
 class CollaboratorRead(CollaboratorBase):
-    id: int
+    id: str
