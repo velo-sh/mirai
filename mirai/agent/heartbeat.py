@@ -3,10 +3,14 @@ import time
 from typing import Optional
 from mirai.agent.loop import AgentLoop
 
+from mirai.agent.im.base import BaseIMProvider
+
 class HeartbeatManager:
-    def __init__(self, agent: AgentLoop, interval_seconds: int = 3600):
+    def __init__(self, agent: AgentLoop, interval_seconds: int = 3600, im_provider: Optional[BaseIMProvider] = None, chat_id: Optional[str] = None):
         self.agent = agent
         self.interval = interval_seconds
+        self.im_provider = im_provider
+        self.chat_id = chat_id
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
 
@@ -35,6 +39,13 @@ class HeartbeatManager:
                 # Execute reasoning loop
                 response = await self.agent.run(pulse_message)
                 print(f"[heartbeat] Insight generated: {response[:100]}...")
+                
+                # Proactive Push to IM
+                if self.im_provider:
+                    await self.im_provider.send_message(
+                        content=f"🤖 **Mirai 自省洞察** ({self.agent.name}):\n\n{response}",
+                        chat_id=self.chat_id
+                    )
                 
             except Exception as e:
                 print(f"[heartbeat] Error during pulse: {e}")
