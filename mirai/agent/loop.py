@@ -1,28 +1,29 @@
 from typing import List, Dict, Any, Optional
 from mirai.agent.providers import AnthropicProvider
 from mirai.agent.tools.base import BaseTool
-from mirai.memory.models import CognitiveTrace
-from mirai.db.session import async_session
+from mirai.db.duck import DuckDBStorage
+from ulid import ULID
 import json
 
 class AgentLoop:
-    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], system_prompt: str, collaborator_id: int):
+    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], system_prompt: str, collaborator_id: str):
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
         self.system_prompt = system_prompt
         self.collaborator_id = collaborator_id
+        self.l3_storage = DuckDBStorage()
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: Dict[str, Any] = None):
-        """Helper to save a trace to the L3 (HDD) storage."""
-        async with async_session() as session:
-            trace = CognitiveTrace(
-                collaborator_id=self.collaborator_id,
-                trace_type=trace_type,
-                content=content,
-                metadata_json=json.dumps(metadata or {})
-            )
-            session.add(trace)
-            await session.commit()
+        """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
+        trace_id = str(ULID())
+        await self.l3_storage.append_trace(
+            id=trace_id,
+            collaborator_id=self.collaborator_id,
+            trace_type=trace_type,
+            content=content,
+            metadata=metadata
+        )
+        return trace_id
 
     async def run(self, message: str, model: str = "claude-3-5-sonnet-20241022") -> str:
         # Archive incoming user message

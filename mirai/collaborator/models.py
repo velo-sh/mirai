@@ -8,7 +8,7 @@ class CollaboratorBase(SQLModel):
     avatar_url: Optional[str] = None
 
 class Collaborator(CollaboratorBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[str] = Field(default=None, primary_key=True)
 
 class CollaboratorCreate(CollaboratorBase):
     pass

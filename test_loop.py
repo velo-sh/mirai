@@ -11,7 +11,7 @@ async def test_agent_loop():
     
     # Initialize components
     provider = MockProvider()
-    collaborator_id = 1
+    collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [EchoTool(), MemorizeTool(collaborator_id=collaborator_id)]
     agent = AgentLoop(
         provider=provider,

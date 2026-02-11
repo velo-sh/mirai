@@ -30,7 +30,7 @@ try:
         provider=provider,
         tools=tools,
         system_prompt="You are Mirai, an AI Collaborator. Be helpful and proactive.",
-        collaborator_id=1 # Default collaborator for MVP
+        collaborator_id="01AN4Z048W7N7DF3SQ5G16CYAJ" # Example ULID
     )
 except Exception as e:
     print(f"Warning: Failed to initialize AgentLoop: {e}")
