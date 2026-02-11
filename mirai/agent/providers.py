@@ -54,6 +54,9 @@ class MockProvider:
     ):
         self.call_count += 1
         
+        if "Recovered Memories" in system:
+            print(f"[mock] SYSTEM PROMPT HAS MEMORIES:\n{system[system.find('### Recovered Memories'):]}")
+        
         # Simple rule-based mock logic
         last_message = messages[-1]
         
