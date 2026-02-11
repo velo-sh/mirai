@@ -2,9 +2,11 @@ import asyncio
 from mirai.agent.providers import MockProvider
 from mirai.agent.loop import AgentLoop
 from mirai.agent.tools.echo import EchoTool
+from mirai.db.session import init_db
 
 async def test_agent_loop():
     print("--- Starting Agent Loop Mock Test ---")
+    await init_db()
     
     # Initialize components
     provider = MockProvider()
@@ -12,7 +14,8 @@ async def test_agent_loop():
     agent = AgentLoop(
         provider=provider,
         tools=tools,
-        system_prompt="You are a helpful AI assistant."
+        system_prompt="You are a helpful AI assistant.",
+        collaborator_id=1
     )
     
     # Run loop

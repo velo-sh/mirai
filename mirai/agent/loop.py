@@ -1,15 +1,33 @@
-import json
 from typing import List, Dict, Any, Optional
 from mirai.agent.providers import AnthropicProvider
 from mirai.agent.tools.base import BaseTool
+from mirai.memory.models import CognitiveTrace
+from mirai.db.session import async_session
+import json
 
 class AgentLoop:
-    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], system_prompt: str):
+    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], system_prompt: str, collaborator_id: int):
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
         self.system_prompt = system_prompt
+        self.collaborator_id = collaborator_id
+
+    async def _archive_trace(self, content: str, trace_type: str, metadata: Dict[str, Any] = None):
+        """Helper to save a trace to the L3 (HDD) storage."""
+        async with async_session() as session:
+            trace = CognitiveTrace(
+                collaborator_id=self.collaborator_id,
+                trace_type=trace_type,
+                content=content,
+                metadata_json=json.dumps(metadata or {})
+            )
+            session.add(trace)
+            await session.commit()
 
     async def run(self, message: str, model: str = "claude-3-5-sonnet-20241022") -> str:
+        # Archive incoming user message
+        await self._archive_trace(message, "message", {"role": "user"})
+        
         messages = [{"role": "user", "content": message}]
         tool_definitions = [tool.definition for tool in self.tools.values()]
 
@@ -58,4 +76,6 @@ class AgentLoop:
                     })
             else:
                 # Final response reached
-                return "".join([c["text"] for c in assistant_content if c["type"] == "text"])
+                final_text = "".join([c["text"] for c in assistant_content if c["type"] == "text"])
+                await self._archive_trace(final_text, "message", {"role": "assistant"})
+                return final_text

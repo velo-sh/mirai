@@ -29,7 +29,8 @@ try:
     agent = AgentLoop(
         provider=provider,
         tools=tools,
-        system_prompt="You are Mirai, an AI Collaborator. Be helpful and proactive."
+        system_prompt="You are Mirai, an AI Collaborator. Be helpful and proactive.",
+        collaborator_id=1 # Default collaborator for MVP
     )
 except Exception as e:
     print(f"Warning: Failed to initialize AgentLoop: {e}")
