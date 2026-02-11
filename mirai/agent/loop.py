@@ -1,7 +1,8 @@
 from typing import List, Dict, Any, Optional
-from mirai.agent.providers import AnthropicProvider
+from mirai.agent.providers import AnthropicProvider, MockEmbeddingProvider
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
+from mirai.memory.vector_db import VectorStore
 from ulid import ULID
 import json
 
@@ -12,6 +13,8 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self.collaborator_id = collaborator_id
         self.l3_storage = DuckDBStorage()
+        self.l2_storage = VectorStore()
+        self.embedder = MockEmbeddingProvider()
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: Dict[str, Any] = None):
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
@@ -29,13 +32,42 @@ class AgentLoop:
         # Archive incoming user message
         await self._archive_trace(message, "message", {"role": "user"})
         
+        # 2. Total Recall: Semantic search in L2 (RAM)
+        query_vector = await self.embedder.get_embeddings(message)
+        memories = await self.l2_storage.search(
+            vector=query_vector, 
+            limit=3, 
+            filter=f"collaborator_id = '{self.collaborator_id}'"
+        )
+        
+        memory_context = ""
+        if memories:
+            trace_ids = []
+            for mem in memories:
+                # Use metadata which is stored as JSON string in LanceDB
+                meta = json.loads(mem["metadata"])
+                if "trace_id" in meta:
+                    trace_ids.append(meta["trace_id"])
+            
+            # 3. Fetch raw context from L3 (HDD)
+            raw_traces = await self.l3_storage.get_traces_by_ids(trace_ids)
+            if raw_traces:
+                memory_context = "\n### Recovered Memories (L3 Raw Context):\n"
+                for trace in raw_traces:
+                    memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
+        
+        # 4. Construct enriched system prompt
+        full_system_prompt = self.system_prompt
+        if memory_context:
+            full_system_prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
+
         messages = [{"role": "user", "content": message}]
         tool_definitions = [tool.definition for tool in self.tools.values()]
 
         while True:
             response = await self.provider.generate_response(
                 model=model,
-                system=self.system_prompt,
+                system=full_system_prompt,
                 messages=messages,
                 tools=tool_definitions
             )

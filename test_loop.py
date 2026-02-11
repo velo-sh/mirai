@@ -21,11 +21,17 @@ async def test_agent_loop():
     )
     
     # Run loop
-    print("[test] Sending message: 'Please test the echo tool.'")
-    response = await agent.run("Please test the echo tool.")
+    # Turn 1: Store an insight
+    print("\n--- Turn 1: Storing Insight ---")
+    response1 = await agent.run("The project code is located in /Users/antigravity/rust_source/mirai. Remember this.")
+    print(f"[test] Final Agent Response 1: {response1}")
     
-    print(f"\n[test] Final Agent Response: {response}")
-    print("--- Test Complete ---")
+    # Turn 2: Ask about it (Retrieval)
+    print("\n--- Turn 2: Retrieval Check ---")
+    response2 = await agent.run("Where is the project code located?")
+    print(f"[test] Final Agent Response 2: {response2}")
+    
+    print("\n--- Test Complete ---")
 
 if __name__ == "__main__":
     asyncio.run(test_agent_loop())

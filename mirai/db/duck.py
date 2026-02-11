@@ -40,6 +40,22 @@ class DuckDBStorage:
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, [id, collaborator_id, trace_type, content, metadata_json, importance, vector_id])
 
+    async def get_traces_by_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
+        if not ids:
+            return []
+        
+        # Format the IDs for the SQL IN clause
+        placeholders = ', '.join(['?'] * len(ids))
+        rel = self.conn.execute(f"""
+            SELECT * FROM cognitive_traces 
+            WHERE id IN ({placeholders})
+            ORDER BY id ASC
+        """, ids)
+        
+        # Convert list of tuples to list of dicts for easier consumption
+        columns = [desc[0] for desc in rel.description]
+        return [dict(zip(columns, row)) for row in rel.fetchall()]
+
     async def get_recent_traces(self, collaborator_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         rel = self.conn.execute("""
             SELECT * FROM cognitive_traces 
