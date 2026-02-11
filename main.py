@@ -8,7 +8,16 @@ from mirai.agent.providers import AnthropicProvider
 from mirai.agent.loop import AgentLoop
 from mirai.agent.tools.echo import EchoTool
 
-app = FastAPI(title="Mirai Node")
+from contextlib import asynccontextmanager
+from mirai.db.session import init_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize SQLite tables
+    await init_db()
+    yield
+
+app = FastAPI(title="Mirai Node", lifespan=lifespan)
 
 class ChatRequest(BaseModel):
     message: str
