@@ -24,6 +24,22 @@ class AnthropicProvider:
             max_tokens=4096,
         )
 
+class MockEmbeddingProvider:
+    """Provides consistent fake embeddings for testing."""
+    def __init__(self, dim: int = 1536):
+        self.dim = dim
+
+    async def get_embeddings(self, text: str) -> List[float]:
+        # Return a deterministic-looking mock vector based on text hash
+        import hashlib
+        h = hashlib.sha256(text.encode()).digest()
+        vector = []
+        for i in range(self.dim):
+            # Very simple fake vector generation
+            val = (h[i % 32] / 255.0) - 0.5
+            vector.append(val)
+        return vector
+
 class MockProvider:
     """Mock provider to test the AgentLoop logic without an API key."""
     def __init__(self):
@@ -42,27 +58,27 @@ class MockProvider:
         last_message = messages[-1]
         
         if self.call_count == 1:
-            # First call: trigger a tool use
+            # First call: trigger a 'memorize' tool use
             from types import SimpleNamespace
             return SimpleNamespace(
                 content=[
-                    SimpleNamespace(type="text", text="Let me check that for you."),
+                    SimpleNamespace(type="text", text="That's an important point about the system architecture. Let me save that to my memory."),
                     SimpleNamespace(
                         type="tool_use", 
-                        id="call_1", 
-                        name="echo", 
-                        input={"message": "Hello from Mock!"},
-                        model_dump=lambda: {"type": "tool_use", "id": "call_1", "name": "echo", "input": {"message": "Hello from Mock!"}}
+                        id="call_mem_1", 
+                        name="memorize", 
+                        input={"content": "The Mirai system uses a 3-tier memory model inspired by biological brains.", "importance": 0.9},
+                        model_dump=lambda: {"type": "tool_use", "id": "call_mem_1", "name": "memorize", "input": {"content": "The Mirai system uses a 3-tier memory model inspired by biological brains.", "importance": 0.9}}
                     )
                 ],
                 stop_reason="tool_use"
             )
         else:
-            # Second call: return final text
+            # Second call: return final text acknowledging the memory
             from types import SimpleNamespace
             return SimpleNamespace(
                 content=[
-                    SimpleNamespace(type="text", text="The tool confirmed: Hello from Mock!")
+                    SimpleNamespace(type="text", text="I've successfully archived that insight. I'll remember the 3-tier memory model for our future discussions.")
                 ],
                 stop_reason="end_turn"
             )
