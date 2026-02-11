@@ -23,3 +23,46 @@ class AnthropicProvider:
             tools=tools,
             max_tokens=4096,
         )
+
+class MockProvider:
+    """Mock provider to test the AgentLoop logic without an API key."""
+    def __init__(self):
+        self.call_count = 0
+
+    async def generate_response(
+        self, 
+        model: str, 
+        system: str, 
+        messages: List[Dict[str, Any]], 
+        tools: List[Dict[str, Any]]
+    ):
+        self.call_count += 1
+        
+        # Simple rule-based mock logic
+        last_message = messages[-1]
+        
+        if self.call_count == 1:
+            # First call: trigger a tool use
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="text", text="Let me check that for you."),
+                    SimpleNamespace(
+                        type="tool_use", 
+                        id="call_1", 
+                        name="echo", 
+                        input={"message": "Hello from Mock!"},
+                        model_dump=lambda: {"type": "tool_use", "id": "call_1", "name": "echo", "input": {"message": "Hello from Mock!"}}
+                    )
+                ],
+                stop_reason="tool_use"
+            )
+        else:
+            # Second call: return final text
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="text", text="The tool confirmed: Hello from Mock!")
+                ],
+                stop_reason="end_turn"
+            )
