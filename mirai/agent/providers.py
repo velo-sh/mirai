@@ -70,11 +70,17 @@ class MockProvider:
 
         from types import SimpleNamespace
 
+        last_text = str(last_text)
+        print(f"[mock] last_text: {last_text[:50]}...")
+
+        last_text = str(last_text)
+        print(f"[mock] last_text: {last_text[:100]}...")
+
         # 1. Thinking Turn
-        if "analyze the situation" in last_text:
+        if "analyze the situation" in last_text or "perform a self-reflection" in last_text:
             print("[mock] Handling Thinking Turn")
             return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="<thinking>The user wants to store information. I should use the memorize tool.</thinking>")],
+                content=[SimpleNamespace(type="text", text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>")],
                 stop_reason="end_turn"
             )
             
@@ -82,29 +88,62 @@ class MockProvider:
         if "Critique your response" in last_text:
             print("[mock] Handling Critique Turn")
             return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="The response is aligned with my SOUL.md. Final version: I have successfully archived that insight.")],
+                content=[SimpleNamespace(type="text", text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan.")],
                 stop_reason="end_turn"
             )
 
         # 3. Tool Turn / Normal Chat
-        if tools and self.call_count < 10:
-            print("[mock] Handling Tool Turn")
+        # If the last message is from the assistant and contains text, we might be reaching the end
+        # But in our mock, we want to trigger a tool at least once if tools are available.
+        # We'll use a local check to see if we already sent a tool in this specific history.
+        
+        has_tool_use = any(msg.get("role") == "assistant" and "tool_use" in str(msg.get("content", "")) for msg in messages)
+
+        if tools and not has_tool_use:
+            print(f"[mock] Handling Tool Turn (new interaction)")
+            
+            # Workspace List Request
+            if "List the files" in last_text or "SYSTEM_HEARTBEAT" in last_text:
+                 print("[mock] Match: Workspace Scan")
+                 return SimpleNamespace(
+                    content=[
+                        SimpleNamespace(type="text", text="Checking the workspace..."),
+                        SimpleNamespace(
+                            type="tool_use", 
+                            id="call_ws_list_99", 
+                            name="workspace_tool", 
+                            input={"action": "list", "path": "."},
+                            model_dump=lambda: {"type": "tool_use", "id": "call_ws_list_99", "name": "workspace_tool", "input": {"action": "list", "path": "."}}
+                        )
+                    ],
+                    stop_reason="tool_use"
+                )
+
+            # Workspace Read Request
+            if "Read the content" in last_text:
+                 print("[mock] Match: Workspace Read")
+                 return SimpleNamespace(
+                    content=[
+                        SimpleNamespace(type="text", text="Reading the file content..."),
+                        SimpleNamespace(
+                            type="tool_use", 
+                            id="call_ws_read_99", 
+                            name="workspace_tool", 
+                            input={"action": "read", "path": "main.py"},
+                            model_dump=lambda: {"type": "tool_use", "id": "call_ws_read_99", "name": "workspace_tool", "input": {"action": "read", "path": "main.py"}}
+                        )
+                    ],
+                    stop_reason="tool_use"
+                )
+
+            # Default
             return SimpleNamespace(
-                content=[
-                    SimpleNamespace(type="text", text="Let me save that to my memory."),
-                    SimpleNamespace(
-                        type="tool_use", 
-                        id="call_mem_1", 
-                        name="memorize", 
-                        input={"content": "The Mirai system implements System 2 thinking.", "importance": 0.9},
-                        model_dump=lambda: {"type": "tool_use", "id": "call_mem_1", "name": "memorize", "input": {"content": "The Mirai system implements System 2 thinking.", "importance": 0.9}}
-                    )
-                ],
-                stop_reason="tool_use"
+                content=[SimpleNamespace(type="text", text="Acknowledged. No specific tool needed for this mock branch.")],
+                stop_reason="end_turn"
             )
         else:
-            print("[mock] Handling final answer or normal chat")
+            print(f"[mock] Handling final answer")
             return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="The system now supports reasoning loops.")],
+                content=[SimpleNamespace(type="text", text="I have finished my workspace tasks.")],
                 stop_reason="end_turn"
             )
