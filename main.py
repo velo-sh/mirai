@@ -23,7 +23,9 @@ async def lifespan(app: FastAPI):
     # Initialize Agent components
     try:
         provider = AnthropicProvider()
-        tools = [EchoTool(), WorkspaceTool()]
+        from mirai.agent.tools.shell import ShellTool
+        from mirai.agent.tools.editor import EditorTool
+        tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool()]
         agent = await AgentLoop.create(
             provider=provider,
             tools=tools,
@@ -31,8 +33,19 @@ async def lifespan(app: FastAPI):
         )
         print(f"AgentLoop initialized for: {agent.name}")
         
-        # Start Heartbeat (using short interval for testing)
-        heartbeat = HeartbeatManager(agent, interval_seconds=120) 
+        # Start Heartbeat with Optional IM Integration
+        feishu_webhook = os.getenv("FEISHU_WEBHOOK_URL")
+        im_provider = None
+        if feishu_webhook:
+            from mirai.agent.im.feishu import FeishuProvider
+            im_provider = FeishuProvider(webhook_url=feishu_webhook)
+            print("Feishu IM notification enabled via Webhook.")
+
+        heartbeat = HeartbeatManager(
+            agent, 
+            interval_seconds=120, 
+            im_provider=im_provider
+        ) 
         await heartbeat.start()
         
     except Exception as e:
