@@ -57,31 +57,54 @@ class MockProvider:
         if "Recovered Memories" in system:
             print(f"[mock] SYSTEM PROMPT HAS MEMORIES:\n{system[system.find('### Recovered Memories'):]}")
         
-        # Simple rule-based mock logic
+        if "# IDENTITY" in system:
+            print(f"[mock] IDENTITY ANCHORS PRESENT (Sandwich Pattern)")
+
         last_message = messages[-1]
-        
-        if self.call_count == 1:
-            # First call: trigger a 'memorize' tool use
-            from types import SimpleNamespace
+        last_content = last_message.get("content", "")
+        if isinstance(last_content, list):
+            # Extract text if list (Anthropic format)
+            last_text = "".join([c.get("text", "") for c in last_content if isinstance(c, dict) and c.get("type") == "text"])
+        else:
+            last_text = str(last_content)
+
+        from types import SimpleNamespace
+
+        # 1. Thinking Turn
+        if "analyze the situation" in last_text:
+            print("[mock] Handling Thinking Turn")
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="<thinking>The user wants to store information. I should use the memorize tool.</thinking>")],
+                stop_reason="end_turn"
+            )
+            
+        # 2. Critique Turn
+        if "Critique your response" in last_text:
+            print("[mock] Handling Critique Turn")
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="The response is aligned with my SOUL.md. Final version: I have successfully archived that insight.")],
+                stop_reason="end_turn"
+            )
+
+        # 3. Tool Turn / Normal Chat
+        if tools and self.call_count < 10:
+            print("[mock] Handling Tool Turn")
             return SimpleNamespace(
                 content=[
-                    SimpleNamespace(type="text", text="That's an important point about the system architecture. Let me save that to my memory."),
+                    SimpleNamespace(type="text", text="Let me save that to my memory."),
                     SimpleNamespace(
                         type="tool_use", 
                         id="call_mem_1", 
                         name="memorize", 
-                        input={"content": "The Mirai system uses a 3-tier memory model inspired by biological brains.", "importance": 0.9},
-                        model_dump=lambda: {"type": "tool_use", "id": "call_mem_1", "name": "memorize", "input": {"content": "The Mirai system uses a 3-tier memory model inspired by biological brains.", "importance": 0.9}}
+                        input={"content": "The Mirai system implements System 2 thinking.", "importance": 0.9},
+                        model_dump=lambda: {"type": "tool_use", "id": "call_mem_1", "name": "memorize", "input": {"content": "The Mirai system implements System 2 thinking.", "importance": 0.9}}
                     )
                 ],
                 stop_reason="tool_use"
             )
         else:
-            # Second call: return final text acknowledging the memory
-            from types import SimpleNamespace
+            print("[mock] Handling final answer or normal chat")
             return SimpleNamespace(
-                content=[
-                    SimpleNamespace(type="text", text="I've successfully archived that insight. I'll remember the 3-tier memory model for our future discussions.")
-                ],
+                content=[SimpleNamespace(type="text", text="The system now supports reasoning loops.")],
                 stop_reason="end_turn"
             )

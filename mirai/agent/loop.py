@@ -7,14 +7,53 @@ from ulid import ULID
 import json
 
 class AgentLoop:
-    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], system_prompt: str, collaborator_id: str):
+    def __init__(self, provider: AnthropicProvider, tools: List[BaseTool], collaborator_id: str):
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
-        self.system_prompt = system_prompt
         self.collaborator_id = collaborator_id
         self.l3_storage = DuckDBStorage()
         self.l2_storage = VectorStore()
         self.embedder = MockEmbeddingProvider()
+        
+        # Identity attributes (to be loaded)
+        self.name = ""
+        self.role = ""
+        self.base_system_prompt = ""
+        self.soul_content = ""
+
+    @classmethod
+    async def create(cls, provider: AnthropicProvider, tools: List[BaseTool], collaborator_id: str):
+        """Factory method to create and initialize an AgentLoop instance."""
+        instance = cls(provider, tools, collaborator_id)
+        await instance._initialize()
+        return instance
+
+    async def _initialize(self):
+        """Asynchronously load collaborator metadata and soul."""
+        from mirai.db.session import async_session
+        from mirai.collaborator.manager import CollaboratorManager
+        
+        async with async_session() as session:
+            manager = CollaboratorManager(session)
+            collab = await manager.get_collaborator(self.collaborator_id)
+            if collab:
+                self.name = collab.name
+                self.role = collab.role
+                self.base_system_prompt = collab.system_prompt
+            else:
+                # Default fallback if not in DB
+                self.name = "Unknown Collaborator"
+                self.base_system_prompt = "You are a helpful AI collaborator."
+        
+        self.soul_content = self._load_soul()
+
+    def _load_soul(self) -> str:
+        import os
+        soul_path = f"mirai/collaborator/{self.collaborator_id}_SOUL.md"
+        if os.path.exists(soul_path):
+            with open(soul_path, "r") as f:
+                return f.read()
+        return ""
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: Dict[str, Any] = None):
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
@@ -56,14 +95,43 @@ class AgentLoop:
                 for trace in raw_traces:
                     memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
         
-        # 4. Construct enriched system prompt
-        full_system_prompt = self.system_prompt
+        # 4. Construct enriched system prompt using Sandwich Pattern
+        # Bottom-up Identity Anchor
+        full_system_prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
+        
         if memory_context:
             full_system_prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
+
+        # Top-down Identity Anchor (Sandwich)
+        full_system_prompt += f"\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
 
         messages = [{"role": "user", "content": message}]
         tool_definitions = [tool.definition for tool in self.tools.values()]
 
+        # Phase 1: Internal Monologue (Thinking)
+        print("[agent] Thinking...")
+        monologue_prompt = "Before responding or using tools, analyze the situation. What is your plan? Use <thinking>...</thinking> tags."
+        
+        # We inject a temporary user message for thinking
+        temp_messages = messages + [{"role": "user", "content": monologue_prompt}]
+        
+        think_response = await self.provider.generate_response(
+            model=model,
+            system=full_system_prompt,
+            messages=temp_messages,
+            tools=[] # No tools during raw thinking
+        )
+        
+        monologue_text = ""
+        for content in think_response.content:
+            if content.type == "text":
+                monologue_text += content.text
+        
+        await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
+        # (Optional: Append monologue to context for tool use turns if desired)
+        # messages.append({"role": "assistant", "content": monologue_text})
+
+        # Phase 2: Action Loop (Tools)
         while True:
             response = await self.provider.generate_response(
                 model=model,
@@ -108,7 +176,24 @@ class AgentLoop:
                         ],
                     })
             else:
-                # Final response reached
+                # Final response reached - Phase 3: Critique
                 final_text = "".join([c["text"] for c in assistant_content if c["type"] == "text"])
-                await self._archive_trace(final_text, "message", {"role": "assistant"})
-                return final_text
+                
+                print("[agent] Critiquing...")
+                critique_prompt = f"Critique your response: '{final_text}'. Does it align with your SOUL.md and recovered memories? If you need to refine it, provide the final version. If it's perfect, repeat it."
+                
+                critique_messages = messages + [{"role": "user", "content": critique_prompt}]
+                refined_response = await self.provider.generate_response(
+                    model=model,
+                    system=full_system_prompt,
+                    messages=critique_messages,
+                    tools=[]
+                )
+                
+                refined_text = ""
+                for content in refined_response.content:
+                    if content.type == "text":
+                        refined_text += content.text
+                
+                await self._archive_trace(refined_text, "message", {"role": "assistant"})
+                return refined_text

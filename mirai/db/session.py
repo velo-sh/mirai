@@ -12,7 +12,6 @@ async_session = sessionmaker(
 
 async def init_db():
     async with engine.begin() as conn:
-        # Import models here to ensure they are registered with SQLModel.metadata
         from mirai.collaborator.models import Collaborator
         from mirai.memory.models import CognitiveTrace
         await conn.run_sync(SQLModel.metadata.create_all)

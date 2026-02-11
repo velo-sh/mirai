@@ -13,12 +13,13 @@ async def test_agent_loop():
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [EchoTool(), MemorizeTool(collaborator_id=collaborator_id)]
-    agent = AgentLoop(
+    agent = await AgentLoop.create(
         provider=provider,
         tools=tools,
-        system_prompt="You are a helpful AI assistant.",
         collaborator_id=collaborator_id
     )
+    print(f"[test] Agent Name: {agent.name}")
+    print(f"[test] Agent Role: {agent.role}")
     
     # Run loop
     # Turn 1: Store an insight
