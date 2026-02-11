@@ -24,8 +24,10 @@ class WorkspaceTool(BaseTool):
     async def execute(self, action: str, path: str = ".") -> str:
         # Basic security: stay within current workspace
         safe_path = os.path.normpath(path)
-        if safe_path.startswith("..") or safe_path.startswith("/"):
-            return "Error: Access denied. Paths must be relative and within the workspace."
+        if safe_path.startswith("/") or os.path.isabs(safe_path):
+            raise ValueError("Absolute paths are not allowed.")
+        if safe_path.startswith(".."):
+            raise ValueError("Path must be within current directory (no traversal allowed).")
 
         if action == "list":
             files = []

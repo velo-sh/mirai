@@ -136,6 +136,23 @@ class MockProvider:
                     stop_reason="tool_use"
                 )
 
+            # Memorization Request (for Integration Tests)
+            if "secret is" in last_text.lower():
+                 print("[mock] Match: Memorize Secret")
+                 return SimpleNamespace(
+                    content=[
+                        SimpleNamespace(type="text", text="I will remember that secret."),
+                        SimpleNamespace(
+                            type="tool_use", 
+                            id="call_mem_qa", 
+                            name="memorize", 
+                            input={"content": last_text, "importance": 1.0},
+                            model_dump=lambda: {"type": "tool_use", "id": "call_mem_qa", "name": "memorize", "input": {"content": last_text, "importance": 1.0}}
+                        )
+                    ],
+                    stop_reason="tool_use"
+                )
+
             # Default
             return SimpleNamespace(
                 content=[SimpleNamespace(type="text", text="Acknowledged. No specific tool needed for this mock branch.")],
