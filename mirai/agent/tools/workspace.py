@@ -23,11 +23,23 @@ class WorkspaceTool(BaseTool):
 
     async def execute(self, action: str, path: str = ".") -> str:
         # Basic security: stay within current workspace
-        safe_path = os.path.normpath(path)
-        if safe_path.startswith("/") or os.path.isabs(safe_path):
-            raise ValueError("Absolute paths are not allowed.")
-        if safe_path.startswith(".."):
-            raise ValueError("Path must be within current directory (no traversal allowed).")
+        try:
+            # Normalize slashes for security (handle backslashes on POSIX)
+            path = path.replace("\\", "/")
+            cwd = os.getcwd()
+            target_path = os.path.abspath(os.path.join(cwd, path))
+            
+            if not target_path.startswith(cwd):
+                raise ValueError(f"Security Error: Path {path} is outside the allowed workspace.")
+            
+            # Additional check for absolute paths in the input string itself
+            if os.path.isabs(path) or path.startswith("/"):
+                 raise ValueError("Security Error: Absolute paths are not allowed.")
+                 
+            safe_path = target_path
+        except Exception as e:
+            if "Security Error" in str(e): raise
+            raise ValueError(f"Security Error: Invalid path provided: {path}")
 
         if action == "list":
             files = []
