@@ -8,7 +8,7 @@ class MemoryEntry(BaseModel):
     content: str
     metadata: Dict[str, Any]
     vector: List[float]
-    collaborator_id: int
+    collaborator_id: str
     scope: str  # e.g., "global", "group", "private"
 
 class VectorStore:
@@ -21,7 +21,7 @@ class VectorStore:
         return pa.schema([
             pa.field("vector", pa.list_(pa.float32(), dim)),
             pa.field("content", pa.string()),
-            pa.field("collaborator_id", pa.int64()),
+            pa.field("collaborator_id", pa.string()),
             pa.field("scope", pa.string()),
             pa.field("metadata", pa.string()), # Store as JSON string
         ])

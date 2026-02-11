@@ -5,7 +5,7 @@ from typing import Dict, Any
 import json
 
 class MemorizeTool(BaseTool):
-    def __init__(self, collaborator_id: int):
+    def __init__(self, collaborator_id: str):
         self.collaborator_id = collaborator_id
 
     @property
@@ -32,21 +32,22 @@ class MemorizeTool(BaseTool):
         }
 
     async def execute(self, content: str, importance: float) -> str:
-        # 1. Archive to L3 (HDD)
-        async with async_session() as session:
-            trace = CognitiveTrace(
-                collaborator_id=self.collaborator_id,
-                trace_type="insight",
-                content=content,
-                importance=importance,
-                metadata_json=json.dumps({"source": "manual_memorize"})
-            )
-            session.add(trace)
-            await session.commit()
-            await session.refresh(trace)
+        # 1. Archive to L3 (HDD) using DuckDB
+        from mirai.db.duck import DuckDBStorage
+        from ulid import ULID
+        
+        l3 = DuckDBStorage()
+        trace_id = str(ULID())
+        await l3.append_trace(
+            id=trace_id,
+            collaborator_id=self.collaborator_id,
+            trace_type="insight",
+            content=content,
+            importance=importance,
+            metadata={"source": "manual_memorize"}
+        )
             
         # 2. Index in L2 (RAM - Vector Store)
-        # For the MVP, we assume a local MockEmbeddingProvider for now
         from mirai.agent.providers import MockEmbeddingProvider
         from mirai.memory.vector_db import VectorStore, MemoryEntry
         
@@ -56,7 +57,7 @@ class MemorizeTool(BaseTool):
         vdb = VectorStore()
         entry = MemoryEntry(
             content=content,
-            metadata={"trace_id": str(trace.id)},
+            metadata={"trace_id": trace_id},
             vector=vector,
             collaborator_id=self.collaborator_id,
             scope="manual"
