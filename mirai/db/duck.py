@@ -63,7 +63,9 @@ class DuckDBStorage:
             ORDER BY id DESC 
             LIMIT ?
         """, [collaborator_id, limit])
-        return rel.fetchall()
+        
+        columns = [desc[0] for desc in rel.description]
+        return [dict(zip(columns, row)) for row in rel.fetchall()]
 
     async def search_traces(self, query: str) -> List[Dict[str, Any]]:
         # DuckDB's full-text search capability
