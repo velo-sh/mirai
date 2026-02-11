@@ -51,7 +51,7 @@ class VectorStore:
             self.db.create_table(self.table_name, data=data, schema=self._get_schema(dim))
 
     async def search(self, vector: List[float], limit: int = 5, filter: Optional[str] = None):
-        if self.table_name not in self.db.table_names():
+        if self.table_name not in self.db.list_tables():
             return []
             
         table = self.db.open_table(self.table_name)

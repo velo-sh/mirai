@@ -23,16 +23,22 @@ class EditorTool(BaseTool):
         }
 
     async def execute(self, action: str, path: str, content: str) -> str:
-        # Security: Re-use the path validation logic
-        from mirai.agent.tools.workspace import WorkspaceTool
-        
-        # We need a quick way to validate without duplicating logic
-        # For now, let's normalize and check traversal
-        safe_path = os.path.normpath(path)
-        if safe_path.startswith("/") or os.path.isabs(safe_path):
-            return "Error: Absolute paths are not allowed."
-        if safe_path.startswith(".."):
-            return "Error: Path must be within current directory."
+        # Security: Robust path validation
+        try:
+            # Normalize slashes for security (handle backslashes on POSIX)
+            path = path.replace("\\", "/")
+            cwd = os.getcwd()
+            target_path = os.path.abspath(os.path.join(cwd, path))
+            
+            if not target_path.startswith(cwd):
+                return f"Error: Security Error: Path {path} is outside the allowed workspace."
+            
+            if os.path.isabs(path) or path.startswith("/"):
+                 return "Error: Security Error: Absolute paths are not allowed."
+                 
+            safe_path = target_path
+        except Exception as e:
+            return f"Error: Security Error: Invalid path provided: {str(e)}"
 
         if action == "write":
             try:
