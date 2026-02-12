@@ -4,6 +4,7 @@ import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -15,6 +16,7 @@ load_dotenv()
 
 import asyncio  # noqa: E402
 
+from mirai.agent.dreamer import Dreamer  # noqa: E402
 from mirai.agent.heartbeat import HeartbeatManager  # noqa: E402
 from mirai.agent.loop import AgentLoop  # noqa: E402
 from mirai.agent.providers import create_provider  # noqa: E402
@@ -37,6 +39,7 @@ class ChatRequest(BaseModel):
 # ---------------------------------------------------------------------------
 agent: AgentLoop | None = None
 heartbeat: HeartbeatManager | None = None
+dreamer: Dreamer | None = None
 config: MiraiConfig | None = None
 _start_time: float = time.monotonic()
 
@@ -94,9 +97,10 @@ async def lifespan(app_instance: FastAPI):
         provider = create_provider(model=config.llm.default_model)
 
         from mirai.agent.tools.editor import EditorTool
+        from mirai.agent.tools.git import GitTool
         from mirai.agent.tools.shell import ShellTool
 
-        tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool()]
+        tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool(), GitTool()]
         agent = await AgentLoop.create(
             provider=provider,
             tools=tools,
@@ -131,7 +135,7 @@ async def lifespan(app_instance: FastAPI):
 
             async def handle_feishu_message(
                 sender_id: str,
-                text: str,
+                text: str | list[dict[str, Any]],
                 chat_id: str,
                 history: list[dict],
             ) -> str:
@@ -156,6 +160,14 @@ async def lifespan(app_instance: FastAPI):
                 log.info("feishu_checkin_sent", agent=agent.name)
             else:
                 log.warning("feishu_checkin_failed")
+
+        # Start Dreamer Service
+        if agent:
+            # For "dreaming" to work, we need at least some interval.
+            # Default to 1 hour, or shorter for dev if needed.
+            dream_interval = int(os.getenv("MIRAI_DREAM_INTERVAL", "3600"))
+            dreamer = Dreamer(agent, agent.l3_storage, interval_seconds=dream_interval)
+            dreamer.start(loop=asyncio.get_running_loop())
 
     except Exception as e:
         log.error("agent_init_failed", error=str(e))
