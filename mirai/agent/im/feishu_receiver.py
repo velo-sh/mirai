@@ -3,21 +3,20 @@
 Connects to Feishu via WebSocket long-connection (no public URL needed).
 Receives private/group messages and routes them to AgentLoop for processing.
 """
+
 import asyncio
 import json
 import logging
 import threading
-from typing import Optional, Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     P2ImMessageReceiveV1,
-    CreateMessageRequest,
-    CreateMessageRequestBody,
-    ReplyMessageRequest,
-    ReplyMessageRequestBody,
     PatchMessageRequest,
     PatchMessageRequestBody,
+    ReplyMessageRequest,
+    ReplyMessageRequestBody,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +46,9 @@ class FeishuEventReceiver:
         self._message_handler = message_handler
         self._encrypt_key = encrypt_key
         self._verification_token = verification_token
-        self._ws_client: Optional[lark.ws.Client] = None
-        self._reply_client: Optional[lark.Client] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ws_client: lark.ws.Client | None = None
+        self._reply_client: lark.Client | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start the WebSocket receiver in a background thread.
@@ -70,9 +69,7 @@ class FeishuEventReceiver:
 
         # Build event dispatcher
         event_handler = (
-            lark.EventDispatcherHandler.builder(
-                self._encrypt_key, self._verification_token
-            )
+            lark.EventDispatcherHandler.builder(self._encrypt_key, self._verification_token)
             .register_p2_im_message_receive_v1(self._on_message_received)
             .build()
         )
@@ -91,10 +88,11 @@ class FeishuEventReceiver:
         # variable to a fresh loop so `run_until_complete()` works.
         def _run_ws():
             import lark_oapi.ws.client as ws_mod
+
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             ws_mod.loop = new_loop  # patch the SDK's module-level loop
-            self._ws_client.start()
+            self._ws_client.start()  # type: ignore[union-attr]
 
         thread = threading.Thread(target=_run_ws, daemon=True, name="feishu-ws")
         thread.start()
@@ -138,9 +136,7 @@ class FeishuEventReceiver:
         except Exception as e:
             logger.error("Error processing Feishu message: %s", e, exc_info=True)
 
-    async def _process_and_reply(
-        self, text: str, sender_id: str, message_id: str, chat_id: str
-    ) -> None:
+    async def _process_and_reply(self, text: str, sender_id: str, message_id: str, chat_id: str) -> None:
         """Process the message through AgentLoop and reply.
 
         Flow:
@@ -163,9 +159,7 @@ class FeishuEventReceiver:
                 )
                 .build()
             )
-            placeholder_resp = await self._reply_client.im.v1.message.areply(
-                placeholder_request
-            )
+            placeholder_resp = await self._reply_client.im.v1.message.areply(placeholder_request)  # type: ignore[union-attr]
             if placeholder_resp.success():
                 placeholder_msg_id = placeholder_resp.data.message_id
                 logger.info("Sent typing indicator for msg %s", message_id)
@@ -187,16 +181,10 @@ class FeishuEventReceiver:
                 patch_request = (
                     PatchMessageRequest.builder()
                     .message_id(placeholder_msg_id)
-                    .request_body(
-                        PatchMessageRequestBody.builder()
-                        .content(json.dumps({"text": reply_text}))
-                        .build()
-                    )
+                    .request_body(PatchMessageRequestBody.builder().content(json.dumps({"text": reply_text})).build())
                     .build()
                 )
-                patch_resp = await self._reply_client.im.v1.message.apatch(
-                    patch_request
-                )
+                patch_resp = await self._reply_client.im.v1.message.apatch(patch_request)  # type: ignore[union-attr]
                 if not patch_resp.success():
                     logger.error(
                         "Failed to patch message: code=%s msg=%s",
@@ -218,7 +206,7 @@ class FeishuEventReceiver:
                     )
                     .build()
                 )
-                await self._reply_client.im.v1.message.areply(fallback_request)
+                await self._reply_client.im.v1.message.areply(fallback_request)  # type: ignore[union-attr]
 
         except Exception as e:
             logger.error("Error replying to message: %s", e, exc_info=True)

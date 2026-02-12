@@ -1,8 +1,10 @@
-import lark_oapi as lark
-from lark_oapi.api.im.v1 import *
 import json
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Any
+
+import lark_oapi as lark
+from lark_oapi.api.im.v1 import *  # noqa: F403  # type: ignore[import-untyped,attr-defined]
+
 from .base import BaseIMProvider
 
 logger = logging.getLogger(__name__)
@@ -17,27 +19,23 @@ class FeishuProvider(BaseIMProvider):
 
     def __init__(
         self,
-        app_id: Optional[str] = None,
-        app_secret: Optional[str] = None,
-        webhook_url: Optional[str] = None,
+        app_id: str | None = None,
+        app_secret: str | None = None,
+        webhook_url: str | None = None,
     ):
         self.webhook_url = webhook_url
-        self.client: Optional[lark.Client] = None
-        self._default_chat_id: Optional[str] = None
+        self.client: lark.Client | None = None
+        self._default_chat_id: str | None = None
 
         if app_id and app_secret:
             self.client = (
-                lark.Client.builder()
-                .app_id(app_id)
-                .app_secret(app_secret)
-                .log_level(lark.LogLevel.INFO)
-                .build()
+                lark.Client.builder().app_id(app_id).app_secret(app_secret).log_level(lark.LogLevel.INFO).build()
             )
 
     # ------------------------------------------------------------------
     # Auto-discovery: list groups the bot has joined
     # ------------------------------------------------------------------
-    async def _discover_chat_id(self) -> Optional[str]:
+    async def _discover_chat_id(self) -> str | None:
         """Fetch the first group chat the bot belongs to (cached)."""
         if self._default_chat_id:
             return self._default_chat_id
@@ -46,7 +44,7 @@ class FeishuProvider(BaseIMProvider):
             return None
 
         try:
-            request = ListChatRequest.builder().build()
+            request = ListChatRequest.builder().build()  # type: ignore[name-defined]  # noqa: F405
             response = await self.client.im.v1.chat.alist(request)
 
             if not response.success():
@@ -109,9 +107,7 @@ class FeishuProvider(BaseIMProvider):
         if self.client:
             target = chat_id or await self._discover_chat_id()
             if target:
-                return await self._send_app_message(
-                    target, "interactive", json.dumps(card_content)
-                )
+                return await self._send_app_message(target, "interactive", json.dumps(card_content))
 
             if self.webhook_url:
                 return await self._send_via_webhook("interactive", card_content)
@@ -125,10 +121,10 @@ class FeishuProvider(BaseIMProvider):
         """Send a message via the App API."""
         try:
             request = (
-                CreateMessageRequest.builder()
+                CreateMessageRequest.builder()  # type: ignore[name-defined]  # noqa: F405
                 .receive_id_type("chat_id")
                 .request_body(
-                    CreateMessageRequestBody.builder()
+                    CreateMessageRequestBody.builder()  # type: ignore[name-defined]  # noqa: F405
                     .receive_id(chat_id)
                     .msg_type(msg_type)
                     .content(content_json)
@@ -136,11 +132,9 @@ class FeishuProvider(BaseIMProvider):
                 )
                 .build()
             )
-            response = await self.client.im.v1.message.acreate(request)
+            response = await self.client.im.v1.message.acreate(request)  # type: ignore[union-attr]
             if not response.success():
-                logger.error(
-                    "Feishu send error: code=%s msg=%s", response.code, response.msg
-                )
+                logger.error("Feishu send error: code=%s msg=%s", response.code, response.msg)
                 return False
             return True
         except Exception as e:
@@ -153,6 +147,7 @@ class FeishuProvider(BaseIMProvider):
 
         try:
             async with httpx.AsyncClient() as client:
+                assert self.webhook_url is not None
                 resp = await client.post(
                     self.webhook_url,
                     json={"msg_type": msg_type, "content": content},

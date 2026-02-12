@@ -1,8 +1,8 @@
-import duckdb
-import os
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import json
+from typing import Any
+
+import duckdb
+
 
 class DuckDBStorage:
     def __init__(self, db_path: str = "mirai_hdd.duckdb"):
@@ -24,55 +24,69 @@ class DuckDBStorage:
             )
         """)
 
-    async def append_trace(self, 
-                     id: str, 
-                     collaborator_id: str, 
-                     trace_type: str, 
-                     content: str, 
-                     metadata: Dict[str, Any] = None,
-                     importance: float = 0.0,
-                     vector_id: str = None):
-        
-        metadata_json = json.dumps(metadata or {})
-        self.conn.execute("""
-            INSERT INTO cognitive_traces 
-            (id, collaborator_id, trace_type, content, metadata_json, importance, vector_id) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, [id, collaborator_id, trace_type, content, metadata_json, importance, vector_id])
+    async def append_trace(
+        self,
+        id: str,
+        collaborator_id: str,
+        trace_type: str,
+        content: str,
+        metadata: dict[str, Any] = None,
+        importance: float = 0.0,
+        vector_id: str = None,
+    ):
 
-    async def get_traces_by_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
+        metadata_json = json.dumps(metadata or {})
+        self.conn.execute(
+            """
+            INSERT INTO cognitive_traces
+            (id, collaborator_id, trace_type, content, metadata_json, importance, vector_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            [id, collaborator_id, trace_type, content, metadata_json, importance, vector_id],
+        )
+
+    async def get_traces_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         if not ids:
             return []
-        
+
         # Format the IDs for the SQL IN clause
-        placeholders = ', '.join(['?'] * len(ids))
-        rel = self.conn.execute(f"""
-            SELECT * FROM cognitive_traces 
+        placeholders = ", ".join(["?"] * len(ids))
+        rel = self.conn.execute(
+            f"""
+            SELECT * FROM cognitive_traces
             WHERE id IN ({placeholders})
             ORDER BY id ASC
-        """, ids)
-        
+        """,
+            ids,
+        )
+
         # Convert list of tuples to list of dicts for easier consumption
         columns = [desc[0] for desc in rel.description]
-        return [dict(zip(columns, row)) for row in rel.fetchall()]
+        return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
 
-    async def get_recent_traces(self, collaborator_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        rel = self.conn.execute("""
-            SELECT * FROM cognitive_traces 
-            WHERE collaborator_id = ? 
-            ORDER BY id DESC 
+    async def get_recent_traces(self, collaborator_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        rel = self.conn.execute(
+            """
+            SELECT * FROM cognitive_traces
+            WHERE collaborator_id = ?
+            ORDER BY id DESC
             LIMIT ?
-        """, [collaborator_id, limit])
-        
-        columns = [desc[0] for desc in rel.description]
-        return [dict(zip(columns, row)) for row in rel.fetchall()]
+        """,
+            [collaborator_id, limit],
+        )
 
-    async def search_traces(self, query: str) -> List[Dict[str, Any]]:
+        columns = [desc[0] for desc in rel.description]
+        return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
+
+    async def search_traces(self, query: str) -> list[tuple[Any, ...]]:
         # DuckDB's full-text search capability
         # For now, a simple LIKE. In real Dreaming, we'd use FTS or vector pointers.
-        rel = self.conn.execute("""
-            SELECT * FROM cognitive_traces 
-            WHERE content LIKE ? 
+        rel = self.conn.execute(
+            """
+            SELECT * FROM cognitive_traces
+            WHERE content LIKE ?
             ORDER BY id DESC
-        """, [f"%{query}%"])
+        """,
+            [f"%{query}%"],
+        )
         return rel.fetchall()

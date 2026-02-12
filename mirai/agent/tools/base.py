@@ -1,14 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any
+
 
 class BaseTool(ABC):
     @property
     @abstractmethod
-    def definition(self) -> Dict[str, Any]:
+    def definition(self) -> dict[str, Any]:
         """Returns the Anthropic tool definition JSON."""
-        pass
+        ...
 
     @abstractmethod
-    async def execute(self, **kwargs) -> str:
+    async def execute(self, **kwargs: Any) -> str:  # type: ignore[override]
         """Executes the tool logic."""
-        pass
+        ...

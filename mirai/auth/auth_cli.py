@@ -10,10 +10,13 @@ Usage:
 import argparse
 import asyncio
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mirai.auth.antigravity_auth import (
-    login, load_credentials, fetch_usage, ensure_valid_credentials,
+    ensure_valid_credentials,
+    fetch_usage,
+    load_credentials,
+    login,
 )
 
 
@@ -29,7 +32,7 @@ def _reset_label(iso_ts: str | None) -> str:
         return ""
     try:
         reset = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         delta = reset - now
         total_min = int(delta.total_seconds() / 60)
         if total_min <= 0:
@@ -125,6 +128,7 @@ async def cmd_status():
         sys.exit(1)
 
     import time
+
     email = creds.get("email", "unknown")
     project = creds.get("project_id", "unknown")
     expires = creds.get("expires", 0)
@@ -136,7 +140,7 @@ async def cmd_status():
     if remaining > 0:
         print(f"  Token:    valid ({hours}h{mins}m remaining)")
     else:
-        print(f"  Token:    expired (will auto-refresh)")
+        print("  Token:    expired (will auto-refresh)")
 
 
 def main():
