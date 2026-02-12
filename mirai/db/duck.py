@@ -23,6 +23,14 @@ class DuckDBStorage:
                 vector_id VARCHAR
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS feishu_history (
+                chat_id VARCHAR,
+                role VARCHAR,
+                content TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
     async def append_trace(
         self,
@@ -77,6 +85,33 @@ class DuckDBStorage:
 
         columns = [desc[0] for desc in rel.description]
         return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
+
+    async def save_feishu_history(self, chat_id: str, role: str, content: str):
+        """Save a message turn to the Feishu history table."""
+        self.conn.execute(
+            """
+            INSERT INTO feishu_history (chat_id, role, content)
+            VALUES (?, ?, ?)
+        """,
+            [chat_id, role, content],
+        )
+
+    async def get_feishu_history(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
+        """Retrieve recent conversation history for a specific chat."""
+        rel = self.conn.execute(
+            """
+            SELECT role, content FROM feishu_history
+            WHERE chat_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """,
+            [chat_id, limit],
+        )
+        # DuckDB returns latest first due to DESC, but LLM context needs chronological.
+        # So we fetch (limit) latest then reverse.
+        rows = rel.fetchall()
+        history = [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+        return history
 
     async def search_traces(self, query: str) -> list[tuple[Any, ...]]:
         # DuckDB's full-text search capability

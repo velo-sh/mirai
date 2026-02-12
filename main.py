@@ -144,6 +144,7 @@ async def lifespan(app_instance: FastAPI):
                 app_id=config.feishu.app_id,
                 app_secret=config.feishu.app_secret,
                 message_handler=handle_feishu_message,
+                storage=agent.l3_storage if agent else None,
             )
             receiver.start(loop=asyncio.get_running_loop())
             log.info("feishu_receiver_started")

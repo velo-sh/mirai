@@ -368,6 +368,8 @@ class AntigravityProvider:
 
             # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)
             body_bytes = orjson.dumps(body)
+            # Log the request body locally for debugging (truncated)
+            log.debug("api_request_body", body=body)
 
             url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
             response = await self._http.post(url, content=body_bytes, headers=headers)
