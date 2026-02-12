@@ -130,8 +130,8 @@ class TestFeishuAgentE2E:
         mock_reply_client.im.v1.message.areply = mock_areply
 
         # Build receiver with real AgentLoop as handler
-        async def handle_message(sender_id: str, text: str, chat_id: str) -> str:
-            return await agent.run(text)
+        async def handle_message(sender_id: str, text: str, chat_id: str, history: list) -> str:
+            return await agent.run(text, history=history)
 
         receiver = FeishuEventReceiver(
             app_id="test_app_id",
@@ -192,9 +192,9 @@ class TestFeishuAgentE2E:
 
         mock_client.im.v1.message.areply = mock_areply
 
-        async def handler(sender_id, text, chat_id):
+        async def handler(sender_id, text, chat_id, history):
             timestamps.append(("llm_start", time.monotonic()))
-            result = await agent.run(text)
+            result = await agent.run(text, history=history)
             timestamps.append(("llm_end", time.monotonic()))
             return result
 
@@ -228,7 +228,7 @@ class TestFeishuAgentE2E:
 
         mock_client.im.v1.message.areply = mock_areply
 
-        async def exploding_handler(sender_id, text, chat_id):
+        async def exploding_handler(sender_id, text, chat_id, history):
             raise RuntimeError("LLM service unavailable")
 
         receiver = FeishuEventReceiver(

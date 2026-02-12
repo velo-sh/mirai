@@ -2,6 +2,7 @@
 
 Connects to Feishu via WebSocket long-connection (no public URL needed).
 Receives private/group messages and routes them to AgentLoop for processing.
+Maintains per-chat conversation history for multi-turn context.
 """
 
 import asyncio
@@ -28,7 +29,7 @@ class FeishuEventReceiver:
         self,
         app_id: str,
         app_secret: str,
-        message_handler: Callable[[str, str, str], Awaitable[str]],
+        message_handler: Callable[[str, str, str, list[dict]], Awaitable[str]],
         encrypt_key: str = "",
         verification_token: str = "",
     ):
@@ -36,7 +37,7 @@ class FeishuEventReceiver:
         Args:
             app_id: Feishu App ID
             app_secret: Feishu App Secret
-            message_handler: async callback(sender_id, message_text, chat_id) -> reply_text
+            message_handler: async callback(sender_id, message_text, chat_id, history) -> reply_text
             encrypt_key: Optional encryption key from Feishu console
             verification_token: Optional verification token from Feishu console
         """
@@ -48,6 +49,11 @@ class FeishuEventReceiver:
         self._ws_client: lark.ws.Client | None = None
         self._reply_client: lark.Client | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Per-chat conversation history: chat_id -> [(role, content), ...]
+        # Keeps the last MAX_HISTORY_TURNS exchanges for multi-turn context.
+        self._conversations: dict[str, list[dict[str, str]]] = {}
+        self.MAX_HISTORY_TURNS = 20  # max user+assistant message pairs
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start the WebSocket receiver in a background thread.
@@ -135,8 +141,9 @@ class FeishuEventReceiver:
 
         Flow:
         1. Immediately reply with "Thinking..." placeholder (typing indicator)
-        2. Process the message through AgentLoop
-        3. Patch the placeholder with the real response
+        2. Process the message through AgentLoop with conversation history
+        3. Send the real response as a new reply
+        4. Record the exchange in conversation history
         """
         try:
             # Step 1: Send "Thinking..." placeholder immediately
@@ -157,16 +164,17 @@ class FeishuEventReceiver:
             else:
                 log.error("feishu_typing_failed", code=placeholder_resp.code, msg=placeholder_resp.msg)
 
-            # Step 2: Process the message through AgentLoop
-            reply_text = await self._message_handler(sender_id, text, chat_id)
+            # Step 2: Get conversation history for this chat
+            history = self._conversations.get(chat_id, [])
+            log.info("conversation_context", chat_id=chat_id, history_turns=len(history))
+
+            # Step 3: Process the message through AgentLoop with history
+            reply_text = await self._message_handler(sender_id, text, chat_id, history)
 
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
 
-            # Step 3: Send the real response as a new reply
-            #
-            # Note: Feishu PATCH API only works for card messages, not text.
-            # So we send the real response as a separate reply to the original message.
+            # Step 4: Send the real response as a new reply
             reply_request = (
                 ReplyMessageRequest.builder()
                 .message_id(message_id)
@@ -184,5 +192,26 @@ class FeishuEventReceiver:
             else:
                 log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
 
+            # Step 5: Record this exchange in conversation history
+            self._record_exchange(chat_id, text, reply_text)
+
         except Exception as e:
             log.error("feishu_reply_error", error=str(e), exc_info=True)
+
+    def _record_exchange(self, chat_id: str, user_msg: str, assistant_msg: str) -> None:
+        """Append a user/assistant exchange to the chat's conversation history.
+
+        Maintains a rolling window of MAX_HISTORY_TURNS messages to prevent
+        unbounded memory growth and context window overflow.
+        """
+        if chat_id not in self._conversations:
+            self._conversations[chat_id] = []
+
+        history = self._conversations[chat_id]
+        history.append({"role": "user", "content": user_msg})
+        history.append({"role": "assistant", "content": assistant_msg})
+
+        # Trim to max turns (each turn = 2 messages: user + assistant)
+        max_messages = self.MAX_HISTORY_TURNS * 2
+        if len(history) > max_messages:
+            self._conversations[chat_id] = history[-max_messages:]

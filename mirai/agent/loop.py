@@ -83,13 +83,35 @@ class AgentLoop:
         )
         return trace_id
 
-    async def run(self, message: str, model: str | None = None) -> str:
+    async def run(
+        self,
+        message: str,
+        model: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Run the agent loop for a single message.
+
+        Args:
+            message: The user's message text.
+            model: Optional model override.
+            history: Optional prior conversation turns (list of
+                     {"role": "user"|"assistant", "content": str} dicts).
+                     These are prepended to the messages sent to the LLM
+                     so the agent has multi-turn context.
+        """
         tracer = get_tracer()
         with tracer.start_as_current_span("agent.run") as span:
             span.set_attribute("message.length", len(message))
-            return await self._run_impl(message, model)
+            if history:
+                span.set_attribute("history.turns", len(history))
+            return await self._run_impl(message, model, history)
 
-    async def _run_impl(self, message: str, model: str | None = None) -> str:
+    async def _run_impl(
+        self,
+        message: str,
+        model: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> str:
         tracer = get_tracer()
         # Use provider's configured model as default
         model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
@@ -130,7 +152,11 @@ class AgentLoop:
         # Top-down Identity Anchor (Sandwich)
         full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
 
-        messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
+        # Build messages with conversation history for multi-turn context
+        messages: list[dict[str, Any]] = []
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": message})
         tool_definitions = [tool.definition for tool in self.tools.values()]
 
         # Phase 1: Internal Monologue (Thinking)
