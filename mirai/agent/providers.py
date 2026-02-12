@@ -1,27 +1,26 @@
-from typing import List, Dict, Any, Optional
 import os
 import time
+from types import SimpleNamespace
+from typing import Any
+
 import anthropic
 
+
 class AnthropicProvider:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY must be set")
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
 
     async def generate_response(
-        self, 
-        model: str, 
-        system: str, 
-        messages: List[Dict[str, str]], 
-        tools: List[Dict[str, Any]]
-    ):
+        self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> Any:
         return await self.client.messages.create(
             model=model,
             system=system,
-            messages=messages,
-            tools=tools,
+            messages=messages,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
             max_tokens=4096,
         )
 
@@ -29,7 +28,7 @@ class AnthropicProvider:
 class AntigravityProvider:
     """
     Routes Claude/Gemini API calls through Google Cloud Code Assist.
-    
+
     Uses the v1internal:streamGenerateContent endpoint at cloudcode-pa.googleapis.com.
     Messages are sent in Google Generative AI format (contents/parts) and responses
     are parsed back to Anthropic-compatible objects for AgentLoop compatibility.
@@ -53,21 +52,24 @@ class AntigravityProvider:
         "claude-3-haiku-20240307": "claude-sonnet-4-5",
     }
 
-    def __init__(self, credentials: Optional[dict] = None):
+    def __init__(self, credentials: dict[str, Any] | None = None):
         import httpx
+
         from mirai.auth.antigravity_auth import load_credentials
-        self.credentials = credentials or load_credentials()
-        if not self.credentials:
+
+        loaded = credentials or load_credentials()
+        if not loaded:
             raise FileNotFoundError(
-                "No Antigravity credentials found. "
-                "Run `python -m mirai.auth.auth_cli` to authenticate."
+                "No Antigravity credentials found. Run `python -m mirai.auth.auth_cli` to authenticate."
             )
+        self.credentials: dict[str, Any] = loaded
         self._http = httpx.AsyncClient(timeout=120.0)
 
-    async def _ensure_fresh_token(self):
+    async def _ensure_fresh_token(self) -> None:
         """Refresh the access token if expired."""
         if time.time() >= self.credentials.get("expires", 0):
             from mirai.auth.antigravity_auth import refresh_access_token, save_credentials
+
             print("[antigravity] Access token expired, refreshing...")
             refreshed = await refresh_access_token(self.credentials["refresh"])
             self.credentials["access"] = refreshed["access"]
@@ -75,29 +77,32 @@ class AntigravityProvider:
             save_credentials(self.credentials)
             print("[antigravity] Token refreshed.")
 
-    def _build_headers(self) -> dict:
+    def _build_headers(self) -> dict[str, str]:
         """Build request headers for Cloud Code Assist."""
         import json as _json
+
         return {
             "Authorization": f"Bearer {self.credentials['access']}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
             "User-Agent": f"antigravity/{self.ANTIGRAVITY_VERSION} darwin/arm64",
             "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-            "Client-Metadata": _json.dumps({
-                "ideType": "IDE_UNSPECIFIED",
-                "platform": "PLATFORM_UNSPECIFIED",
-                "pluginType": "GEMINI",
-            }),
+            "Client-Metadata": _json.dumps(
+                {
+                    "ideType": "IDE_UNSPECIFIED",
+                    "platform": "PLATFORM_UNSPECIFIED",
+                    "pluginType": "GEMINI",
+                }
+            ),
         }
 
     @staticmethod
-    def _convert_messages(messages: List[Dict[str, Any]]) -> list:
+    def _convert_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert Anthropic-format messages to Google Generative AI format."""
         contents = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
-            parts = []
+            parts: list[dict[str, Any]] = []
             content = msg.get("content", "")
 
             if isinstance(content, str):
@@ -108,32 +113,37 @@ class AntigravityProvider:
                         if block.get("type") == "text":
                             parts.append({"text": block["text"]})
                         elif block.get("type") == "tool_use":
-                            parts.append({
-                                "functionCall": {
-                                    "name": block["name"],
-                                    "args": block.get("input", {}),
+                            parts.append(
+                                {  # type: ignore[dict-item]
+                                    "functionCall": {
+                                        "name": block["name"],
+                                        "args": block.get("input", {}),
+                                    }
                                 }
-                            })
+                            )
                         elif block.get("type") == "tool_result":
                             result_text = block.get("content", "")
                             if isinstance(result_text, list):
                                 result_text = " ".join(
-                                    b.get("text", "") for b in result_text
+                                    b.get("text", "")
+                                    for b in result_text
                                     if isinstance(b, dict) and b.get("type") == "text"
                                 )
-                            parts.append({
-                                "functionResponse": {
-                                    "name": block.get("tool_use_id", "unknown"),
-                                    "response": {"result": str(result_text)},
+                            parts.append(
+                                {  # type: ignore[dict-item]
+                                    "functionResponse": {
+                                        "name": block.get("tool_use_id", "unknown"),
+                                        "response": {"result": str(result_text)},
+                                    }
                                 }
-                            })
+                            )
 
             if parts:
                 contents.append({"role": role, "parts": parts})
         return contents
 
     @staticmethod
-    def _convert_tools(tools: List[Dict[str, Any]]) -> list:
+    def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert Anthropic-format tools to Google Generative AI format."""
         if not tools:
             return []
@@ -150,14 +160,18 @@ class AntigravityProvider:
         return [{"functionDeclarations": declarations}]
 
     def _build_request(
-        self, model: str, system: str,
-        messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+        self,
+        model: str,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
         max_tokens: int = 4096,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build the Cloud Code Assist request body."""
         import random
+
         contents = self._convert_messages(messages)
-        request = {"contents": contents}
+        request: dict[str, Any] = {"contents": contents}
 
         if system:
             request["systemInstruction"] = {
@@ -181,15 +195,15 @@ class AntigravityProvider:
         }
 
     @staticmethod
-    def _parse_sse_response(raw_text: str) -> dict:
+    def _parse_sse_response(raw_text: str) -> SimpleNamespace:
         """
         Parse SSE stream response and build Anthropic-compatible response object.
         Returns a dict with 'content' list and 'stop_reason'.
         """
-        from types import SimpleNamespace
         import json as _json
+        from types import SimpleNamespace
 
-        content_blocks = []
+        content_blocks: list[SimpleNamespace] = []
         stop_reason = "end_turn"
         tool_call_counter = 0
 
@@ -220,19 +234,19 @@ class AntigravityProvider:
                         if content_blocks and content_blocks[-1].type == "text":
                             content_blocks[-1].text += part["text"]
                         else:
-                            content_blocks.append(
-                                SimpleNamespace(type="text", text=part["text"])
-                            )
+                            content_blocks.append(SimpleNamespace(type="text", text=part["text"]))
                     if "functionCall" in part:
                         fc = part["functionCall"]
                         tool_call_counter += 1
                         call_id = fc.get("id", f"{fc['name']}_{int(time.time())}_{tool_call_counter}")
-                        content_blocks.append(SimpleNamespace(
-                            type="tool_use",
-                            id=call_id,
-                            name=fc["name"],
-                            input=fc.get("args", {}),
-                        ))
+                        content_blocks.append(
+                            SimpleNamespace(
+                                type="tool_use",
+                                id=call_id,
+                                name=fc["name"],
+                                input=fc.get("args", {}),
+                            )
+                        )
                         stop_reason = "tool_use"
 
             if candidate and candidate.get("finishReason"):
@@ -251,10 +265,11 @@ class AntigravityProvider:
         self,
         model: str,
         system: str,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]],
-    ):
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> SimpleNamespace:
         import asyncio
+
         await self._ensure_fresh_token()
 
         # Remap model name if needed for Cloud Code Assist
@@ -266,6 +281,7 @@ class AntigravityProvider:
         headers = self._build_headers()
 
         import json as _json
+
         body_json = _json.dumps(body)
 
         max_retries = 3
@@ -283,11 +299,13 @@ class AntigravityProvider:
 
                 if response.status_code == 401:
                     self.credentials["expires"] = 0
-                    raise Exception(f"Cloud Code Assist: authentication expired")
+                    raise Exception("Cloud Code Assist: authentication expired")
 
                 if response.status_code == 429 and attempt < max_retries:
-                    delay = base_delay * (2 ** attempt)
-                    print(f"[antigravity] Rate limited. Retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})...")
+                    delay = base_delay * (2**attempt)
+                    print(
+                        f"[antigravity] Rate limited. Retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})..."
+                    )
                     await asyncio.sleep(delay)
                     continue
 
@@ -295,24 +313,24 @@ class AntigravityProvider:
 
             except Exception as e:
                 if attempt < max_retries and "rate" in str(e).lower():
-                    delay = base_delay * (2 ** attempt)
+                    delay = base_delay * (2**attempt)
                     await asyncio.sleep(delay)
                     continue
                 raise
+        raise Exception("Cloud Code Assist: max retries exceeded")
 
 
-
-
-def create_provider() -> AnthropicProvider:
+def create_provider() -> AnthropicProvider | AntigravityProvider:
     """
     Auto-detect and create the best available provider.
-    
+
     Priority:
     1. Antigravity credentials (~/.mirai/antigravity_credentials.json)
     2. ANTHROPIC_API_KEY environment variable
     """
     # Try Antigravity first
     from mirai.auth.antigravity_auth import load_credentials
+
     creds = load_credentials()
     if creds:
         try:
@@ -334,14 +352,17 @@ def create_provider() -> AnthropicProvider:
         "  2. Set ANTHROPIC_API_KEY environment variable."
     )
 
+
 class MockEmbeddingProvider:
     """Provides consistent fake embeddings for testing."""
+
     def __init__(self, dim: int = 1536):
         self.dim = dim
 
-    async def get_embeddings(self, text: str) -> List[float]:
+    async def get_embeddings(self, text: str) -> list[float]:
         # Return a deterministic-looking mock vector based on text hash
         import hashlib
+
         h = hashlib.sha256(text.encode()).digest()
         vector = []
         for i in range(self.dim):
@@ -350,31 +371,31 @@ class MockEmbeddingProvider:
             vector.append(val)
         return vector
 
+
 class MockProvider:
     """Mock provider to test the AgentLoop logic without an API key."""
+
     def __init__(self):
         self.call_count = 0
 
     async def generate_response(
-        self, 
-        model: str, 
-        system: str, 
-        messages: List[Dict[str, Any]], 
-        tools: List[Dict[str, Any]]
-    ):
+        self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> SimpleNamespace:
         self.call_count += 1
-        
+
         if "Recovered Memories" in system:
-            print(f"[mock] SYSTEM PROMPT HAS MEMORIES:\n{system[system.find('### Recovered Memories'):]}")
-        
+            print(f"[mock] SYSTEM PROMPT HAS MEMORIES:\n{system[system.find('### Recovered Memories') :]}")
+
         if "# IDENTITY" in system:
-            print(f"[mock] IDENTITY ANCHORS PRESENT (Sandwich Pattern)")
+            print("[mock] IDENTITY ANCHORS PRESENT (Sandwich Pattern)")
 
         last_message = messages[-1]
         last_content = last_message.get("content", "")
         if isinstance(last_content, list):
             # Extract text if list (Anthropic format)
-            last_text = "".join([c.get("text", "") for c in last_content if isinstance(c, dict) and c.get("type") == "text"])
+            last_text = "".join(
+                [c.get("text", "") for c in last_content if isinstance(c, dict) and c.get("type") == "text"]
+            )
         else:
             last_text = str(last_content)
 
@@ -385,10 +406,12 @@ class MockProvider:
         for m in messages:
             content = m.get("content", "")
             if isinstance(content, list):
-                full_history_text += " ".join([c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"])
+                full_history_text += " ".join(
+                    [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                )
             else:
                 full_history_text += str(content)
-        
+
         last_text = str(last_text)
         print(f"[mock] last_text: {last_text[:50]}...")
 
@@ -396,73 +419,113 @@ class MockProvider:
         if "analyze the situation" in last_text or "perform a self-reflection" in last_text:
             print("[mock] Handling Thinking Turn")
             return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>")],
-                stop_reason="end_turn"
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>",
+                    )
+                ],
+                stop_reason="end_turn",
             )
-            
+
         # 2. Critique Turn
         if "Critique your response" in last_text:
             print("[mock] Handling Critique Turn")
             return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan.")],
-                stop_reason="end_turn"
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan.",
+                    )
+                ],
+                stop_reason="end_turn",
             )
 
         # 3. Tool Turn / Normal Chat
         # If the last message is from the assistant and contains text, we might be reaching the end
         # But in our mock, we want to trigger a tool at least once if tools are available.
         # We'll use a local check to see if we already sent a tool in this specific history.
-        
+
         # 3. Tool Turn / Sequential Logic
         # We need to decide if we should call another tool or give a final answer.
-        
+
         # Check if the VERY LAST assistant message had a tool_use that hasn't been answered yet
         # Actually, in AgentLoop, if stop_reason is tool_use, it executes and appends result.
         # So when we are called again, the last message is a tool_result from user.
-        
-        last_role = messages[-1].get("role")
-        
+
+        messages[-1].get("role")
+
         if tools:
             # E2E Proactive Maintenance Workflow
             if "maintenance_check" in full_history_text.lower():
-                 print("[mock] Match: E2E Maintenance Workflow")
-                 
-                 shell_results = [m for m in messages if m.get("role") == "user" and any("tool_result" in str(c) and "call_shell_maint" in str(c) for c in (m.get("content") if isinstance(m.get("content"), list) else []))]
-                 
-                 if not shell_results:
+                print("[mock] Match: E2E Maintenance Workflow")
+
+                shell_results = [
+                    m
+                    for m in messages
+                    if m.get("role") == "user"
+                    and any("tool_result" in str(c) and "call_shell_maint" in str(c) for c in (m.get("content") or []))
+                ]
+
+                if not shell_results:
                     return SimpleNamespace(
                         content=[
                             SimpleNamespace(type="text", text="Checking for maintenance issues..."),
                             SimpleNamespace(
-                                type="tool_use", 
-                                id="call_shell_maint", 
-                                name="shell_tool", 
+                                type="tool_use",
+                                id="call_shell_maint",
+                                name="shell_tool",
                                 input={"command": "ls maintenance_fixed.txt"},
-                                model_dump=lambda: {"type": "tool_use", "id": "call_shell_maint", "name": "shell_tool", "input": {"command": "ls maintenance_fixed.txt"}}
-                            )
+                                model_dump=lambda: {
+                                    "type": "tool_use",
+                                    "id": "call_shell_maint",
+                                    "name": "shell_tool",
+                                    "input": {"command": "ls maintenance_fixed.txt"},
+                                },
+                            ),
                         ],
-                        stop_reason="tool_use"
+                        stop_reason="tool_use",
                     )
-                 
-                 editor_results = [m for m in messages if m.get("role") == "user" and any("tool_result" in str(c) and "call_edit_maint" in str(c) for c in (m.get("content") if isinstance(m.get("content"), list) else []))]
-                 
-                 if not editor_results:
+
+                editor_results = [
+                    m
+                    for m in messages
+                    if m.get("role") == "user"
+                    and any("tool_result" in str(c) and "call_edit_maint" in str(c) for c in (m.get("content") or []))
+                ]
+
+                if not editor_results:
                     return SimpleNamespace(
                         content=[
                             SimpleNamespace(type="text", text="Fixing the issue..."),
                             SimpleNamespace(
-                                type="tool_use", 
-                                id="call_edit_maint", 
-                                name="editor_tool", 
-                                input={"action": "write", "path": "maintenance_fixed.txt", "content": "HEALED: Sanity check passed."},
-                                model_dump=lambda: {"type": "tool_use", "id": "call_edit_maint", "name": "editor_tool", "input": {"action": "write", "path": "maintenance_fixed.txt", "content": "HEALED: Sanity check passed."}}
-                            )
+                                type="tool_use",
+                                id="call_edit_maint",
+                                name="editor_tool",
+                                input={
+                                    "action": "write",
+                                    "path": "maintenance_fixed.txt",
+                                    "content": "HEALED: Sanity check passed.",
+                                },
+                                model_dump=lambda: {
+                                    "type": "tool_use",
+                                    "id": "call_edit_maint",
+                                    "name": "editor_tool",
+                                    "input": {
+                                        "action": "write",
+                                        "path": "maintenance_fixed.txt",
+                                        "content": "HEALED: Sanity check passed.",
+                                    },
+                                },
+                            ),
                         ],
-                        stop_reason="tool_use"
+                        stop_reason="tool_use",
                     )
 
             # Default single-tool branch for other tests
-            has_any_tool_use = any(msg.get("role") == "assistant" and "tool_use" in str(msg.get("content", "")) for msg in messages)
+            has_any_tool_use = any(
+                msg.get("role") == "assistant" and "tool_use" in str(msg.get("content", "")) for msg in messages
+            )
             if not has_any_tool_use:
                 # Workspace List Request
                 if "List the files" in last_text or "SYSTEM_HEARTBEAT" in last_text:
@@ -470,8 +533,7 @@ class MockProvider:
                     pass
 
         # Final Answer if no more tools needed
-        print(f"[mock] Handling final answer")
+        print("[mock] Handling final answer")
         return SimpleNamespace(
-            content=[SimpleNamespace(type="text", text="I have finished the complex task.")],
-            stop_reason="end_turn"
+            content=[SimpleNamespace(type="text", text="I have finished the complex task.")], stop_reason="end_turn"
         )

@@ -13,14 +13,13 @@ import os
 import secrets
 import webbrowser
 from base64 import urlsafe_b64encode
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import Optional
-from urllib.parse import urlencode, urlparse, parse_qs
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
-
 
 # OAuth constants (from openclaw's google-antigravity-auth extension)
 CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
@@ -86,8 +85,8 @@ def _build_auth_url(challenge: str, state: str) -> str:
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP handler that captures the OAuth callback."""
 
-    code: Optional[str] = None
-    state: Optional[str] = None
+    code: str | None = None
+    state: str | None = None
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -137,6 +136,7 @@ async def exchange_code(code: str, verifier: str) -> dict:
         raise ValueError("Token exchange returned no refresh_token")
 
     import time
+
     expires = int(time.time()) + expires_in - 300  # 5 min buffer
     return {"access": access, "refresh": refresh, "expires": expires}
 
@@ -163,6 +163,7 @@ async def refresh_access_token(refresh_token: str) -> dict:
         raise ValueError("Token refresh returned no access_token")
 
     import time
+
     expires = int(time.time()) + expires_in - 300
     return {"access": access, "expires": expires}
 
@@ -174,20 +175,24 @@ async def fetch_project_id(access_token: str) -> str:
         "Content-Type": "application/json",
         "User-Agent": "google-api-nodejs-client/9.15.1",
         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-        "Client-Metadata": json.dumps({
-            "ideType": "IDE_UNSPECIFIED",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI",
-        }),
+        "Client-Metadata": json.dumps(
+            {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }
+        ),
     }
 
-    body = json.dumps({
-        "metadata": {
-            "ideType": "IDE_UNSPECIFIED",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI",
+    body = json.dumps(
+        {
+            "metadata": {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }
         }
-    })
+    )
 
     async with httpx.AsyncClient() as client:
         for endpoint in CODE_ASSIST_ENDPOINTS:
@@ -203,16 +208,16 @@ async def fetch_project_id(access_token: str) -> str:
                 data = response.json()
                 project = data.get("cloudaicompanionProject")
                 if isinstance(project, str) and project.strip():
-                    return project
+                    return str(project)
                 if isinstance(project, dict) and project.get("id"):
-                    return project["id"]
+                    return str(project["id"])
             except Exception:
                 continue
 
     return DEFAULT_PROJECT_ID
 
 
-async def fetch_user_email(access_token: str) -> Optional[str]:
+async def fetch_user_email(access_token: str) -> str | None:
     """Fetch the authenticated user's email."""
     try:
         async with httpx.AsyncClient() as client:
@@ -222,7 +227,9 @@ async def fetch_user_email(access_token: str) -> Optional[str]:
             )
             if response.is_success:
                 data = response.json()
-                return data.get("email")
+                email = data.get("email")
+                if isinstance(email, str):
+                    return email
     except Exception:
         pass
     return None
@@ -236,12 +243,12 @@ def save_credentials(credentials: dict) -> None:
     print(f"Credentials saved to {CREDENTIALS_PATH}")
 
 
-def load_credentials() -> Optional[dict]:
+def load_credentials() -> dict | None:
     """Load credentials from disk. Returns None if not found."""
     if not CREDENTIALS_PATH.exists():
         return None
     try:
-        return json.loads(CREDENTIALS_PATH.read_text())
+        return dict(json.loads(CREDENTIALS_PATH.read_text()))
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -256,6 +263,7 @@ async def ensure_valid_credentials() -> dict:
         )
 
     import time
+
     if time.time() >= creds.get("expires", 0):
         print("[antigravity] Access token expired, refreshing...")
         refreshed = await refresh_access_token(creds["refresh"])
@@ -327,7 +335,7 @@ async def login() -> dict:
 
     save_credentials(credentials)
 
-    print(f"\n✅ Antigravity OAuth complete!")
+    print("\n✅ Antigravity OAuth complete!")
     print(f"   Email: {email or 'unknown'}")
     print(f"   Project: {project_id}")
 
@@ -358,7 +366,7 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
         "pluginType": "GEMINI",
     }
 
-    result = {
+    result: dict[str, Any] = {
         "plan": None,
         "project": None,
         "credits_available": None,
@@ -376,10 +384,7 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
             )
             if r.status_code == 200:
                 data = r.json()
-                result["plan"] = (
-                    data.get("currentTier", {}).get("name")
-                    or data.get("planType")
-                )
+                result["plan"] = data.get("currentTier", {}).get("name") or data.get("planType")
                 proj = data.get("cloudaicompanionProject")
                 if isinstance(proj, str):
                     result["project"] = proj
@@ -411,13 +416,14 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
                         used_pct = (1.0 - float(remaining)) * 100
                     else:
                         used_pct = 0.0
-                    result["models"].append({
-                        "id": model_id,
-                        "used_pct": used_pct,
-                        "reset_time": quota.get("resetTime"),
-                    })
+                    result["models"].append(
+                        {
+                            "id": model_id,
+                            "used_pct": used_pct,
+                            "reset_time": quota.get("resetTime"),
+                        }
+                    )
         except Exception:
             pass
 
     return result
-

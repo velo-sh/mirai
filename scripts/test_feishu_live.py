@@ -1,9 +1,12 @@
 """Live Feishu integration test using real .env credentials."""
+
 import asyncio
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 async def main():
     app_id = os.getenv("FEISHU_APP_ID")
@@ -16,6 +19,7 @@ async def main():
     print(f"[1/3] Credentials loaded: APP_ID={app_id[:8]}...{app_id[-4:]}")
 
     from mirai.agent.im.feishu import FeishuProvider
+
     provider = FeishuProvider(app_id=app_id, app_secret=app_secret)
 
     # Step 2: Auto-discover chat
@@ -40,6 +44,7 @@ async def main():
         print("SUCCESS: Message sent! Check your Feishu group chat.")
     else:
         print("FAILED: Message could not be sent. Check permissions.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

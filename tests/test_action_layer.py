@@ -1,14 +1,17 @@
-import asyncio
 import os
+
 import pytest
-from mirai.agent.tools.shell import ShellTool
+
 from mirai.agent.tools.editor import EditorTool
+from mirai.agent.tools.shell import ShellTool
+
 
 @pytest.mark.asyncio
 async def test_shell_tool_basic():
     tool = ShellTool()
     result = await tool.execute("echo 'hello world'")
     assert "hello world" in result
+
 
 @pytest.mark.asyncio
 async def test_shell_tool_timeout():
@@ -19,22 +22,24 @@ async def test_shell_tool_timeout():
     result = await tool.execute("ls -la")
     assert "STDOUT" in result
 
+
 @pytest.mark.asyncio
 async def test_editor_tool_write():
     tool = EditorTool()
     test_path = "tests/data/test_file.txt"
     test_content = "This is a test of the Action Layer."
-    
+
     result = await tool.execute("write", test_path, test_content)
     assert "Successfully wrote" in result
     assert os.path.exists(test_path)
-    
-    with open(test_path, "r") as f:
+
+    with open(test_path) as f:
         assert f.read() == test_content
-    
+
     # Clean up
     if os.path.exists(test_path):
         os.remove(test_path)
+
 
 @pytest.mark.asyncio
 async def test_editor_tool_security():
