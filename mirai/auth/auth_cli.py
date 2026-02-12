@@ -108,14 +108,15 @@ async def cmd_usage():
     # Sort: most used first, then alphabetical
     visible.sort(key=lambda m: (-m["used_pct"], m["id"]))
 
-    print(f"  {'Model':<36s}  {'Quota':>22s}  Reset")
-    print(f"  {'─' * 36}  {'─' * 22}  {'─' * 18}")
+    print(f"  {'Model':<37s}  {'Quota':<27s}  Reset")
+    print(f"  {'─' * 37}  {'─' * 27}  {'─' * 18}")
     for m in visible:
         pct = m["used_pct"]
         bar = _bar(pct)
         reset = _reset_label(m.get("reset_time"))
         status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴" if pct < 100 else "⚠️"
-        print(f"  {status} {m['id']:<34s}  {bar} {pct:5.1f}%{reset}")
+        # status (2 cells) + space (1) + id (34 cells) = 37 columns
+        print(f"  {status} {m['id']:<34s}  {bar} {pct:5.1f}%  {reset}")
 
     print()
 
