@@ -114,7 +114,7 @@ async def cmd_usage():
         pct = m["used_pct"]
         bar = _bar(pct)
         reset = _reset_label(m.get("reset_time"))
-        status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
+        status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴" if pct < 100 else "⚠️"
         print(f"  {status} {m['id']:<34s}  {bar} {pct:5.1f}%{reset}")
 
     print()

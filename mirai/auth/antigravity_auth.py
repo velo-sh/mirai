@@ -411,15 +411,21 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
                 for model_id, info in sorted(models.items()):
                     quota = info.get("quotaInfo", {})
                     remaining = quota.get("remainingFraction")
+                    reset_time = quota.get("resetTime")
+
                     if remaining is not None:
                         used_pct = (1.0 - float(remaining)) * 100
+                    elif reset_time:
+                        # Missing remainingFraction but has a resetTime usually means exhausted/restricted
+                        used_pct = 100.0
                     else:
                         used_pct = 0.0
+
                     result["models"].append(
                         {
                             "id": model_id,
                             "used_pct": used_pct,
-                            "reset_time": quota.get("resetTime"),
+                            "reset_time": reset_time,
                         }
                     )
         except Exception:
