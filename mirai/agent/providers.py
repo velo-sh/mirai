@@ -42,8 +42,14 @@ class AntigravityProvider:
     DEFAULT_MODEL = "claude-sonnet-4-5-20250514"
     ANTIGRAVITY_VERSION = "1.15.8"
 
-    # Model name mapping from Anthropic SDK names to Cloud Code Assist names
+    # Model name mapping from standard names to Cloud Code Assist internal IDs
     MODEL_MAP = {
+        # Claude 4.x series
+        "claude-sonnet-4-20250514": "claude-sonnet-4-5",
+        "claude-sonnet-4-latest": "claude-sonnet-4-5",
+        "claude-opus-4-20250514": "claude-opus-4-5-thinking",
+        "claude-opus-4-latest": "claude-opus-4-5-thinking",
+        # Claude 3.x series (legacy)
         "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
         "claude-3-5-sonnet-latest": "claude-sonnet-4-5",
         "claude-3-7-sonnet-20250219": "claude-sonnet-4-5",
@@ -51,6 +57,10 @@ class AntigravityProvider:
         "claude-3-opus-20240229": "claude-opus-4-5-thinking",
         "claude-3-5-haiku-20241022": "claude-sonnet-4-5",
         "claude-3-haiku-20240307": "claude-sonnet-4-5",
+        # Direct Cloud Code Assist IDs (pass-through)
+        "claude-sonnet-4-5": "claude-sonnet-4-5",
+        "claude-opus-4-5-thinking": "claude-opus-4-5-thinking",
+        "gemini-2.0-flash": "gemini-2.0-flash",
     }
 
     def __init__(self, credentials: dict[str, Any] | None = None, model: str = "claude-sonnet-4-20250514"):
@@ -278,6 +288,8 @@ class AntigravityProvider:
         effective_model = self.MODEL_MAP.get(model, model)
         if effective_model != model:
             print(f"[antigravity] Model remapped: {model} -> {effective_model}")
+        elif model not in self.MODEL_MAP:
+            print(f"[antigravity] WARNING: Model '{model}' not in MODEL_MAP, sending as-is.")
 
         body = self._build_request(effective_model, system, messages, tools)
         headers = self._build_headers()
