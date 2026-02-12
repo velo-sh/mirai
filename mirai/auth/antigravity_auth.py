@@ -8,7 +8,6 @@ through Google Cloud's Code Assist infrastructure.
 
 import asyncio
 import hashlib
-import json
 import os
 import secrets
 import webbrowser
@@ -20,6 +19,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import orjson
+
+# Shared HTTP client for connection pooling + HTTP/2
+_http = httpx.AsyncClient(timeout=30.0, http2=True)
 
 # OAuth constants (from openclaw's google-antigravity-auth extension)
 CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
@@ -111,20 +114,19 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
 
 async def exchange_code(code: str, verifier: str) -> dict:
     """Exchange authorization code for access + refresh tokens."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            TOKEN_URL,
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": REDIRECT_URI,
-                "code_verifier": verifier,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
+    response = await _http.post(
+        TOKEN_URL,
+        data={
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": REDIRECT_URI,
+            "code_verifier": verifier,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
 
     access = data.get("access_token", "").strip()
     refresh = data.get("refresh_token", "").strip()
@@ -143,18 +145,17 @@ async def exchange_code(code: str, verifier: str) -> dict:
 
 async def refresh_access_token(refresh_token: str) -> dict:
     """Refresh an expired access token using the refresh token."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            TOKEN_URL,
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
+    response = await _http.post(
+        TOKEN_URL,
+        data={
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
 
     access = data.get("access_token", "").strip()
     expires_in = data.get("expires_in", 0)
@@ -175,16 +176,16 @@ async def fetch_project_id(access_token: str) -> str:
         "Content-Type": "application/json",
         "User-Agent": "google-api-nodejs-client/9.15.1",
         "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-        "Client-Metadata": json.dumps(
+        "Client-Metadata": orjson.dumps(
             {
                 "ideType": "IDE_UNSPECIFIED",
                 "platform": "PLATFORM_UNSPECIFIED",
                 "pluginType": "GEMINI",
             }
-        ),
+        ).decode(),
     }
 
-    body = json.dumps(
+    body = orjson.dumps(
         {
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED",
@@ -194,25 +195,24 @@ async def fetch_project_id(access_token: str) -> str:
         }
     )
 
-    async with httpx.AsyncClient() as client:
-        for endpoint in CODE_ASSIST_ENDPOINTS:
-            try:
-                response = await client.post(
-                    f"{endpoint}/v1internal:loadCodeAssist",
-                    headers=headers,
-                    content=body,
-                )
-                if not response.is_success:
-                    continue
-
-                data = response.json()
-                project = data.get("cloudaicompanionProject")
-                if isinstance(project, str) and project.strip():
-                    return str(project)
-                if isinstance(project, dict) and project.get("id"):
-                    return str(project["id"])
-            except Exception:
+    for endpoint in CODE_ASSIST_ENDPOINTS:
+        try:
+            response = await _http.post(
+                f"{endpoint}/v1internal:loadCodeAssist",
+                headers=headers,
+                content=body,
+            )
+            if not response.is_success:
                 continue
+
+            data = response.json()
+            project = data.get("cloudaicompanionProject")
+            if isinstance(project, str) and project.strip():
+                return str(project)
+            if isinstance(project, dict) and project.get("id"):
+                return str(project["id"])
+        except Exception:
+            continue
 
     return DEFAULT_PROJECT_ID
 
@@ -220,16 +220,15 @@ async def fetch_project_id(access_token: str) -> str:
 async def fetch_user_email(access_token: str) -> str | None:
     """Fetch the authenticated user's email."""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            if response.is_success:
-                data = response.json()
-                email = data.get("email")
-                if isinstance(email, str):
-                    return email
+        response = await _http.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if response.is_success:
+            data = response.json()
+            email = data.get("email")
+            if isinstance(email, str):
+                return email
     except Exception:
         pass
     return None
@@ -238,7 +237,7 @@ async def fetch_user_email(access_token: str) -> str | None:
 def save_credentials(credentials: dict) -> None:
     """Save credentials to ~/.mirai/antigravity_credentials.json."""
     CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CREDENTIALS_PATH.write_text(json.dumps(credentials, indent=2))
+    CREDENTIALS_PATH.write_text(orjson.dumps(credentials, option=orjson.OPT_INDENT_2).decode())
     os.chmod(CREDENTIALS_PATH, 0o600)
     print(f"Credentials saved to {CREDENTIALS_PATH}")
 
@@ -248,8 +247,8 @@ def load_credentials() -> dict | None:
     if not CREDENTIALS_PATH.exists():
         return None
     try:
-        return dict(json.loads(CREDENTIALS_PATH.read_text()))
-    except (json.JSONDecodeError, OSError):
+        return dict(orjson.loads(CREDENTIALS_PATH.read_bytes()))
+    except (orjson.JSONDecodeError, OSError):
         return None
 
 
@@ -374,13 +373,13 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
         "models": [],
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, http2=True) as client:
         # Account info
         try:
             r = await client.post(
                 f"{base}/v1internal:loadCodeAssist",
                 headers=headers,
-                content=json.dumps({"metadata": metadata}),
+                content=orjson.dumps({"metadata": metadata}),
             )
             if r.status_code == 200:
                 data = r.json()
@@ -401,7 +400,7 @@ async def fetch_usage(access_token: str, project_id: str = "") -> dict:
 
         # Per-model quotas
         try:
-            body = json.dumps({"project": project_id} if project_id else {})
+            body = orjson.dumps({"project": project_id} if project_id else {})
             r = await client.post(
                 f"{base}/v1internal:fetchAvailableModels",
                 headers=headers,

@@ -1,13 +1,14 @@
-import json
-import logging
 from typing import Any
 
 import lark_oapi as lark
+import orjson
 from lark_oapi.api.im.v1 import *  # noqa: F403  # type: ignore[import-untyped,attr-defined]
+
+from mirai.logging import get_logger
 
 from .base import BaseIMProvider
 
-logger = logging.getLogger(__name__)
+log = get_logger("mirai.feishu")
 
 
 class FeishuProvider(BaseIMProvider):
@@ -48,28 +49,20 @@ class FeishuProvider(BaseIMProvider):
             response = await self.client.im.v1.chat.alist(request)
 
             if not response.success():
-                logger.error(
-                    "Feishu chat.list failed: code=%s msg=%s",
-                    response.code,
-                    response.msg,
-                )
+                log.error("feishu_chat_list_failed", code=response.code, msg=response.msg)
                 return None
 
             items = response.data.items if response.data else []
             if items:
                 self._default_chat_id = items[0].chat_id
-                logger.info(
-                    "Auto-discovered Feishu chat: %s (%s)",
-                    items[0].name,
-                    self._default_chat_id,
-                )
+                log.info("feishu_chat_discovered", name=items[0].name, chat_id=self._default_chat_id)
                 return self._default_chat_id
 
-            logger.warning("Bot has not joined any group chats yet.")
+            log.warning("feishu_no_chats")
             return None
 
         except Exception as e:
-            logger.error("Feishu chat discovery error: %s", e)
+            log.error("feishu_discovery_error", error=str(e))
             return None
 
     # ------------------------------------------------------------------
@@ -91,7 +84,7 @@ class FeishuProvider(BaseIMProvider):
         if self.client:
             target = chat_id or await self._discover_chat_id()
             if target:
-                return await self._send_app_message(target, "text", json.dumps({"text": content}))
+                return await self._send_app_message(target, "text", orjson.dumps({"text": content}).decode())
 
             # Fall back to webhook if chat discovery failed
             if self.webhook_url:
@@ -107,7 +100,7 @@ class FeishuProvider(BaseIMProvider):
         if self.client:
             target = chat_id or await self._discover_chat_id()
             if target:
-                return await self._send_app_message(target, "interactive", json.dumps(card_content))
+                return await self._send_app_message(target, "interactive", orjson.dumps(card_content).decode())
 
             if self.webhook_url:
                 return await self._send_via_webhook("interactive", card_content)
@@ -134,25 +127,27 @@ class FeishuProvider(BaseIMProvider):
             )
             response = await self.client.im.v1.message.acreate(request)  # type: ignore[union-attr]
             if not response.success():
-                logger.error("Feishu send error: code=%s msg=%s", response.code, response.msg)
+                log.error("feishu_send_error", code=response.code, msg=response.msg)
                 return False
             return True
         except Exception as e:
-            logger.error("Feishu send exception: %s", e)
+            log.error("feishu_send_exception", error=str(e))
             return False
 
     async def _send_via_webhook(self, msg_type: str, content: Any) -> bool:
         """POST to a Feishu custom bot webhook."""
         import httpx
 
+        if not hasattr(self, "_webhook_http"):
+            self._webhook_http = httpx.AsyncClient(timeout=10.0, http2=True)
+
         try:
-            async with httpx.AsyncClient() as client:
-                assert self.webhook_url is not None
-                resp = await client.post(
-                    self.webhook_url,
-                    json={"msg_type": msg_type, "content": content},
-                )
-                return resp.status_code == 200
+            assert self.webhook_url is not None
+            resp = await self._webhook_http.post(
+                self.webhook_url,
+                json={"msg_type": msg_type, "content": content},
+            )
+            return resp.status_code == 200
         except Exception as e:
-            logger.error("Feishu webhook exception: %s", e)
+            log.error("feishu_webhook_error", error=str(e))
             return False

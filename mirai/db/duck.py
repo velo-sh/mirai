@@ -1,7 +1,7 @@
-import json
 from typing import Any
 
 import duckdb
+import orjson
 
 
 class DuckDBStorage:
@@ -35,7 +35,7 @@ class DuckDBStorage:
         vector_id: str = None,
     ):
 
-        metadata_json = json.dumps(metadata or {})
+        metadata_json = orjson.dumps(metadata or {}).decode()
         self.conn.execute(
             """
             INSERT INTO cognitive_traces

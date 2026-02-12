@@ -1,13 +1,36 @@
-import json
+"""
+Agent Loop — the core agentic execution cycle.
+
+Implements a Think → Act → Critique loop with tool use, memory recall,
+and identity-anchored system prompts.
+"""
+
+import os
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import Any
 
+import orjson
 from ulid import ULID
 
+from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
+from mirai.logging import get_logger
 from mirai.memory.vector_db import VectorStore
+
+log = get_logger("mirai.agent")
+
+
+@lru_cache(maxsize=8)
+def _load_soul(collaborator_id: str) -> str:
+    """Load SOUL.md from disk (cached after first read)."""
+    soul_path = f"mirai/collaborator/{collaborator_id}_SOUL.md"
+    if os.path.exists(soul_path):
+        with open(soul_path) as f:
+            return f.read()
+    return ""
 
 
 class AgentLoop:
@@ -49,16 +72,7 @@ class AgentLoop:
                 self.name = "Unknown Collaborator"
                 self.base_system_prompt = "You are a helpful AI collaborator."
 
-        self.soul_content = self._load_soul()
-
-    def _load_soul(self) -> str:
-        import os
-
-        soul_path = f"mirai/collaborator/{self.collaborator_id}_SOUL.md"
-        if os.path.exists(soul_path):
-            with open(soul_path) as f:
-                return f.read()
-        return ""
+        self.soul_content = _load_soul(self.collaborator_id)
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] = None):
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
@@ -85,7 +99,7 @@ class AgentLoop:
             trace_ids = []
             for mem in memories:
                 # Use metadata which is stored as JSON string in LanceDB
-                meta = json.loads(mem["metadata"])
+                meta = orjson.loads(mem["metadata"])
                 if "trace_id" in meta:
                     trace_ids.append(meta["trace_id"])
 
@@ -108,91 +122,80 @@ class AgentLoop:
         # Top-down Identity Anchor (Sandwich)
         full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
 
-        messages = [{"role": "user", "content": message}]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
         tool_definitions = [tool.definition for tool in self.tools.values()]
 
         # Phase 1: Internal Monologue (Thinking)
-        print("[agent] Thinking...")
+        log.info("phase_thinking", collaborator=self.collaborator_id)
         monologue_prompt = "Before responding or using tools, analyze the situation. What is your plan? Use <thinking>...</thinking> tags."
 
         # We inject a temporary user message for thinking
         temp_messages = messages + [{"role": "user", "content": monologue_prompt}]
 
-        think_response = await self.provider.generate_response(
+        think_response: ProviderResponse = await self.provider.generate_response(
             model=model,
             system=full_system_prompt,
             messages=temp_messages,
             tools=[],  # No tools during raw thinking
         )
 
-        monologue_text = ""
-        for content in think_response.content:
-            if content.type == "text":
-                monologue_text += content.text
+        monologue_text = think_response.text()
 
         await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
-        # (Optional: Append monologue to context for tool use turns if desired)
-        # messages.append({"role": "assistant", "content": monologue_text})
 
         # Phase 2: Action Loop (Tools)
         while True:
-            response = await self.provider.generate_response(
+            response: ProviderResponse = await self.provider.generate_response(
                 model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
             )
 
             # Process assistant response
-            assistant_content: list[Any] = []
-            tool_calls = []
+            assistant_content: list[dict[str, Any]] = []
+            tool_calls: list[ToolUseBlock] = []
 
-            for content in response.content:
-                if content.type == "text":
-                    assistant_content.append({"type": "text", "text": content.text})
-                elif content.type == "tool_use":
-                    tool_calls.append(content)
-                    assistant_content.append(content.model_dump())  # type: ignore[union-attr]
+            for block in response.content:
+                if isinstance(block, TextBlock):
+                    assistant_content.append({"type": "text", "text": block.text})
+                elif isinstance(block, ToolUseBlock):
+                    tool_calls.append(block)
+                    assistant_content.append(block.model_dump())
 
-            messages.append({"role": "assistant", "content": assistant_content})  # type: ignore[dict-item]
+            messages.append({"role": "assistant", "content": assistant_content})
 
             if response.stop_reason == "tool_use":
                 for tool_call in tool_calls:
-                    tool_name = tool_call.name
-                    tool_input = tool_call.input
+                    log.info("tool_call", tool=tool_call.name, input=tool_call.input)
 
-                    print(f"[agent] Using tool: {tool_name} with input: {tool_input}")
-
-                    if tool_name in self.tools:
-                        result = await self.tools[tool_name].execute(**tool_input)
+                    if tool_call.name in self.tools:
+                        result = await self.tools[tool_call.name].execute(**tool_call.input)
                     else:
-                        result = f"Error: Tool {tool_name} not found."
+                        result = f"Error: Tool {tool_call.name} not found."
 
                     messages.append(
                         {
                             "role": "user",
-                            "content": [  # type: ignore[dict-item]
+                            "content": [
                                 {
                                     "type": "tool_result",
                                     "tool_use_id": tool_call.id,
                                     "content": result,
                                 }
                             ],
-                        }  # type: ignore[dict-item]
+                        }
                     )
             else:
                 # Final response reached - Phase 3: Critique
-                final_text = "".join([c["text"] for c in assistant_content if c["type"] == "text"])
+                final_text = "".join(c["text"] for c in assistant_content if c.get("type") == "text")
 
-                print("[agent] Critiquing...")
+                log.info("phase_critique", collaborator=self.collaborator_id)
                 critique_prompt = f"Critique your response: '{final_text}'. Does it align with your SOUL.md and recovered memories? If you need to refine it, provide the final version. If it's perfect, repeat it."
 
                 critique_messages = messages + [{"role": "user", "content": critique_prompt}]
-                refined_response = await self.provider.generate_response(
+                refined_response: ProviderResponse = await self.provider.generate_response(
                     model=model, system=full_system_prompt, messages=critique_messages, tools=[]
                 )
 
-                refined_text = ""
-                for content in refined_response.content:
-                    if content.type == "text":
-                        refined_text += content.text
+                refined_text = refined_response.text()
 
                 await self._archive_trace(refined_text, "message", {"role": "assistant"})
                 return refined_text

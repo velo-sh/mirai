@@ -2,7 +2,10 @@ import asyncio
 
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.db.duck import DuckDBStorage
+from mirai.logging import get_logger
 from mirai.memory.vector_db import MemoryEntry, VectorStore
+
+log = get_logger("mirai.dreamer")
 
 
 class Dreamer:
@@ -24,7 +27,7 @@ class Dreamer:
         2. Generate embeddings.
         3. Index in L2.
         """
-        print(f"[dreamer] {self.collaborator_id} is starting to dream...")
+        log.info("dream_start", collaborator=self.collaborator_id)
 
         # In a real system, we'd track 'last_processed_ulid'.
         # For the MVP, we assume any trace with vector_id=NULL in L3 needs indexing.
@@ -44,12 +47,12 @@ class Dreamer:
         traces = [dict(zip(columns, row, strict=False)) for row in unindexed_traces]
 
         if not traces:
-            print("[dreamer] Nothing to consolidate.")
+            log.info("dream_nothing_to_consolidate")
             return
 
         new_entries = []
         for trace in traces:
-            print(f"[dreamer] Processing trace: {trace['id']}")
+            log.debug("dream_processing_trace", trace_id=trace["id"])
             vector = await self.embedder.get_embeddings(trace["content"])
             entry = MemoryEntry(
                 content=trace["content"],
@@ -65,7 +68,7 @@ class Dreamer:
 
         if new_entries:
             await self.l2.add_memories(new_entries)
-            print(f"[dreamer] Successfully consolidated {len(new_entries)} memories.")
+            log.info("dream_consolidated", count=len(new_entries))
 
 
 async def main():

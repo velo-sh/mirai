@@ -1,7 +1,12 @@
+"""Heartbeat Manager — proactive self-reflection pulse."""
+
 import asyncio
 
 from mirai.agent.im.base import BaseIMProvider
 from mirai.agent.loop import AgentLoop
+from mirai.logging import get_logger
+
+log = get_logger("mirai.heartbeat")
 
 
 class HeartbeatManager:
@@ -24,7 +29,7 @@ class HeartbeatManager:
             return
         self.is_running = True
         self._task = asyncio.create_task(self._loop())
-        print(f"[heartbeat] Started for {self.agent.name} (Interval: {self.interval}s)")
+        log.info("heartbeat_started", collaborator=self.agent.name, interval=self.interval)
 
     async def _loop(self):
         while self.is_running:
@@ -32,7 +37,7 @@ class HeartbeatManager:
                 # Wait for interval
                 await asyncio.sleep(self.interval)
 
-                print(f"[heartbeat] Triggering pulse for {self.agent.name}...")
+                log.info("heartbeat_pulse", collaborator=self.agent.name)
 
                 # The Heartbeat Pulse
                 pulse_message = (
@@ -43,7 +48,7 @@ class HeartbeatManager:
 
                 # Execute reasoning loop
                 response = await self.agent.run(pulse_message)
-                print(f"[heartbeat] Insight generated: {response[:100]}...")
+                log.info("heartbeat_insight", collaborator=self.agent.name, insight=response[:100])
 
                 # Proactive Push to IM
                 if self.im_provider:
@@ -52,7 +57,7 @@ class HeartbeatManager:
                     )
 
             except Exception as e:
-                print(f"[heartbeat] Error during pulse: {e}")
+                log.error("heartbeat_error", error=str(e))
                 await asyncio.sleep(60)  # Wait before retry
 
     async def stop(self):
@@ -63,4 +68,4 @@ class HeartbeatManager:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        print(f"[heartbeat] Stopped for {self.agent.name}")
+        log.info("heartbeat_stopped", collaborator=self.agent.name)
