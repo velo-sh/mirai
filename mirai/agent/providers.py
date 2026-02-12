@@ -110,7 +110,16 @@ class AntigravityProvider:
         # Direct Cloud Code Assist IDs (pass-through)
         "claude-sonnet-4-5": "claude-sonnet-4-5",
         "claude-opus-4-5-thinking": "claude-opus-4-5-thinking",
+        # Gemini series
         "gemini-2.0-flash": "gemini-2.0-flash",
+        "gemini-2.5-flash": "gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-thinking": "gemini-2.5-flash-thinking",
+        "gemini-2.5-pro": "gemini-2.5-pro",
+        "gemini-3-flash": "gemini-3-flash",
+        "gemini-3-pro-high": "gemini-3-pro-high",
+        "gemini-3-pro-low": "gemini-3-pro-low",
+        "gemini-3-pro-image": "gemini-3-pro-image",
     }
 
     def __init__(self, credentials: dict[str, Any] | None = None, model: str = "claude-sonnet-4-20250514"):

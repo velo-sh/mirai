@@ -27,7 +27,7 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 class LLMConfig(BaseModel):
     """LLM provider configuration."""
 
-    default_model: str = "claude-sonnet-4-20250514"
+    default_model: str = "gemini-2.5-flash"
     max_tokens: int = 4096
     max_retries: int = 3
 
