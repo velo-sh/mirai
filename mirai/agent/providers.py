@@ -229,12 +229,14 @@ class AntigravityProvider:
             content = msg.get("content", "")
 
             if isinstance(content, str):
-                parts.append({"text": content})
+                if content:  # Skip empty strings for Claude compatibility
+                    parts.append({"text": content})
             elif isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "text":
-                            parts.append({"text": block["text"]})
+                            if block.get("text"):  # Skip empty text for Claude compatibility
+                                parts.append({"text": block["text"]})
                         elif block.get("type") == "image":
                             source = block.get("source", {})
                             if source.get("type") == "base64":
@@ -247,14 +249,18 @@ class AntigravityProvider:
                                     }
                                 )
                         elif block.get("type") == "tool_use":
-                            parts.append(
-                                {  # type: ignore[dict-item]
-                                    "functionCall": {
-                                        "name": block["name"],
-                                        "args": block.get("input", {}),
-                                    }
-                                }
-                            )
+                            fc_payload: dict[str, Any] = {
+                                "name": block["name"],
+                                "args": block.get("input", {}),
+                            }
+                            # Preserve id for Claude model compatibility via Cloud Code Assist
+                            if block.get("id"):
+                                fc_payload["id"] = block["id"]
+                            fc_part: dict[str, Any] = {"functionCall": fc_payload}
+                            # Preserve Gemini 3 thought_signature for replay
+                            if block.get("thought_signature"):
+                                fc_part["thoughtSignature"] = block["thought_signature"]
+                            parts.append(fc_part)  # type: ignore[arg-type]
                         elif block.get("type") == "tool_result":
                             result_text = block.get("content", "")
                             if isinstance(result_text, list):
@@ -263,13 +269,15 @@ class AntigravityProvider:
                                     for b in result_text
                                     if isinstance(b, dict) and b.get("type") == "text"
                                 )
+                            fr_payload: dict[str, Any] = {
+                                "name": block.get("tool_use_id", "unknown"),
+                                "response": {"result": str(result_text)},
+                            }
+                            # Preserve id for Claude model compatibility
+                            if block.get("tool_use_id"):
+                                fr_payload["id"] = block["tool_use_id"]
                             parts.append(
-                                {  # type: ignore[dict-item]
-                                    "functionResponse": {
-                                        "name": block.get("tool_use_id", "unknown"),
-                                        "response": {"result": str(result_text)},
-                                    }
-                                }
+                                {"functionResponse": fr_payload}  # type: ignore[dict-item]
                             )
 
             if parts:
@@ -377,11 +385,14 @@ class AntigravityProvider:
                         fc = part["functionCall"]
                         tool_call_counter += 1
                         call_id = fc.get("id", f"{fc['name']}_{int(time.time())}_{tool_call_counter}")
+                        # Extract Gemini 3 thought_signature
+                        thought_sig = part.get("thoughtSignature")
                         content_blocks.append(
                             ToolUseBlock(
                                 id=call_id,
                                 name=fc["name"],
                                 input=fc.get("args", {}),
+                                thought_signature=thought_sig,
                             )
                         )
                         stop_reason = "tool_use"
@@ -402,7 +413,7 @@ class AntigravityProvider:
     @retry(
         retry=retry_if_exception_type(_RetryableAPIError),
         wait=wait_exponential(min=2, max=30),
-        stop=stop_after_attempt(4),
+        stop=stop_after_attempt(8),
         before_sleep=lambda rs: log.warning(
             "rate_limited",
             attempt=rs.attempt_number,
@@ -426,50 +437,58 @@ class AntigravityProvider:
             effective_model = self.MODEL_MAP.get(model, model)
 
             # --- Smart Failover Logic ---
-            # Priority fallback chain if the requested model is exhausted
-            FALLBACK_CHAIN = [
-                # Primary
-                "claude-sonnet-4-5",
-                "claude-opus-4-5-thinking",
-                # Secondary
-                "gemini-3-pro-high",
-                "gemini-3-pro-low",
-                # Tertiary (Safety net)
-                "gemini-3-flash",
-                "gemini-2.0-flash",
-            ]
+            # If the effective model is exhausted, find the best available alternative
+            if not await self.quota_manager.is_available(effective_model):
+                log.warning("model_exhausted_failing_over", exhausted_model=effective_model)
 
-            if effective_model in FALLBACK_CHAIN:
-                # Check if effective_model is available
-                if not await self.quota_manager.is_available(effective_model):
-                    log.warning("model_exhausted_failing_over", exhausted_model=effective_model)
+                # Only try known-good models, in priority order
+                FAILOVER_MODELS = [
+                    "claude-sonnet-4-5",
+                    "claude-opus-4-5-thinking",
+                    "claude-opus-4-6-thinking",
+                    "claude-sonnet-4-5-thinking",
+                    "gemini-3-pro-high",
+                    "gemini-3-pro-low",
+                    "gemini-3-flash",
+                    "gemini-2.5-pro",
+                    "gemini-2.5-flash",
+                    "gemini-2.5-flash-thinking",
+                    "gemini-2.5-flash-lite",
+                    "gpt-oss-120b-medium",
+                ]
 
-                    found_fallback = False
-                    for fallback in FALLBACK_CHAIN:
-                        if await self.quota_manager.is_available(fallback):
-                            log.info("failover_selected_model", selected=fallback)
-                            effective_model = fallback
-                            found_fallback = True
-                            break
+                found_fallback = False
+                for candidate in FAILOVER_MODELS:
+                    if await self.quota_manager.is_available(candidate):
+                        log.info("failover_selected_model", selected=candidate)
+                        effective_model = candidate
+                        found_fallback = True
+                        break
 
-                    if not found_fallback:
-                        log.error("all_models_exhausted", chain=FALLBACK_CHAIN)
-                        # We still try the last one or stay with current to let API potentially return 429
+                if not found_fallback:
+                    log.error("all_failover_models_exhausted")
             # ----------------------------
 
             if effective_model != model and effective_model not in self.MODEL_MAP.values():
                 log.info("model_remapped", original=model, effective=effective_model)
                 span.set_attribute("llm.effective_model", effective_model)
             elif model not in self.MODEL_MAP:
-                log.warning("model_not_in_map", model=model)
+                # Model not recognized — fail fast with helpful message
+                await self.quota_manager._maybe_refresh()
+                available = sorted(self.quota_manager._quotas.keys()) or list(self.MODEL_MAP.values())
+                raise ValueError(f"Model '{model}' is not available. Available models: {', '.join(available)}")
 
             body = self._build_request(effective_model, system, messages, tools)
             headers = self._build_headers()
 
             # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)
             body_bytes = orjson.dumps(body)
-            # Log the request body locally for debugging (truncated)
-            log.debug("api_request_body", body=body)
+            log.info(
+                "api_request_sending",
+                requested_model=model,
+                effective_model=effective_model,
+                body_model=body.get("model"),
+            )
 
             url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
             response = await self._http.post(url, content=body_bytes, headers=headers)
@@ -486,6 +505,13 @@ class AntigravityProvider:
                 raise RuntimeError("Cloud Code Assist: authentication expired")
 
             if response.status_code in (429, 503):
+                # Mark this model as exhausted so the next retry picks a different one
+                self.quota_manager._quotas[effective_model] = 100.0
+                log.warning(
+                    "model_marked_exhausted_after_429",
+                    model=effective_model,
+                    remaining_available=[m for m, pct in self.quota_manager._quotas.items() if pct < 100.0],
+                )
                 raise _RetryableAPIError(response.status_code, error_text[:200])
 
             raise RuntimeError(f"Cloud Code Assist API error ({response.status_code}): {error_text}")

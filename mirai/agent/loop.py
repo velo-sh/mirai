@@ -190,7 +190,15 @@ class AgentLoop:
                 )
 
             # Top-down Identity Anchor (Sandwich)
-            full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
+            full_system_prompt += (
+                "\n\n# IDENTITY REINFORCEMENT\n"
+                "Remember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently.\n\n"
+                "# TOOL USE RULES\n"
+                "You have real tools available. When you need data (status, files, etc.), "
+                "you MUST invoke tools through the function call mechanism. "
+                "NEVER write tool results in your text response — that is fabrication. "
+                "If you want to call a tool, emit a functionCall; do NOT describe the call in prose."
+            )
 
             # Build messages with conversation history for multi-turn context
             messages: list[dict[str, Any]] = []
@@ -225,11 +233,40 @@ class AgentLoop:
                 monologue_wrapped = f"<thinking>\n{monologue_text}\n</thinking>"
             messages.append({"role": "assistant", "content": monologue_wrapped})
 
+            # Nudge: explicitly tell the model to execute now (prevents Gemini from
+            # producing empty output after seeing its own planning turn)
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Now execute your plan. If you need data, invoke the appropriate tool "
+                        "via a function call. Then provide your final response to the user."
+                    ),
+                }
+            )
+
             # Phase 2: Action Loop (Tools)
+            MAX_TOOL_ROUNDS = 10
+            tool_round = 0
             while True:
+                tool_round += 1
+                if tool_round > MAX_TOOL_ROUNDS:
+                    log.warning("max_tool_rounds_reached", rounds=MAX_TOOL_ROUNDS)
+                    break
                 with tracer.start_as_current_span("agent.act"):
+                    log.info(
+                        "phase2_request",
+                        tools_count=len(tool_definitions),
+                        tool_names=[t["name"] for t in tool_definitions],
+                    )
                     response: ProviderResponse = await self.provider.generate_response(
                         model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
+                    )
+                    log.info(
+                        "phase2_response",
+                        stop_reason=response.stop_reason,
+                        content_blocks=len(response.content),
+                        block_types=[type(b).__name__ for b in response.content],
                     )
 
                 # Process assistant response
@@ -245,7 +282,9 @@ class AgentLoop:
 
                 messages.append({"role": "assistant", "content": assistant_content})
 
-                if response.stop_reason == "tool_use":
+                # Execute tools if present (Gemini may return ToolUseBlock with
+                # stop_reason='end_turn' instead of 'tool_use', so check both)
+                if response.stop_reason == "tool_use" or tool_calls:
                     for tool_call in tool_calls:
                         log.info("tool_call", tool=tool_call.name, input=tool_call.input)
 
@@ -254,7 +293,15 @@ class AgentLoop:
                         )
 
                         if tool_call.name in self.tools:
-                            result = await self.tools[tool_call.name].execute(**tool_call.input)
+                            try:
+                                result = await self.tools[tool_call.name].execute(**tool_call.input)
+                            except Exception as exc:
+                                log.error("tool_exec_error", tool=tool_call.name, error=str(exc))
+                                result = (
+                                    f"⚠️ Tool Error: {exc}\n\n"
+                                    "💊 Doctor Hint: Consider using `mirai_system(action='status')` "
+                                    "to check system health, or retry with adjusted parameters."
+                                )
                         else:
                             result = f"Error: Tool {tool_call.name} not found."
 
@@ -273,46 +320,61 @@ class AgentLoop:
                             }
                         )
                 else:
-                    # Final response reached - Phase 3: Critique
-                    final_text = "".join(c["text"] for c in assistant_content if c.get("type") == "text")
-                    log.info("phase_critique_start", draft_length=len(final_text))
+                    # No tool calls — exit loop, proceed to critique
+                    break
 
-                    critique_prompt = (
-                        f"Review your draft response below and refine it if needed.\n\n"
-                        f'Draft: "{final_text}"\n\n'
-                        f"Rules:\n"
-                        f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
-                        f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
-                        f"- If the draft is already perfect, output it exactly as-is."
-                    )
-
-                    critique_messages = messages + [{"role": "user", "content": critique_prompt}]
-                    with tracer.start_as_current_span("agent.critique"):
-                        refined_response: ProviderResponse = await self.provider.generate_response(
-                            model=model, system=full_system_prompt, messages=critique_messages, tools=[]
+            # Phase 3: Critique (runs after loop exits — normal or max-rounds)
+            # Collect final text from the last assistant message
+            final_text = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        final_text = "".join(
+                            c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"
                         )
+                    elif isinstance(content, str):
+                        final_text = content
+                    break
 
-                    refined_text = refined_response.text().strip()
-                    log.info("phase_critique_done", refined_length=len(refined_text))
+            log.info("phase_critique_start", draft_length=len(final_text))
 
-                    if not refined_text:
-                        if final_text:
-                            log.warning("critique_returned_empty", fallback="using_final_text")
-                            refined_text = final_text
-                        else:
-                            # If even Phase 2 was empty, salvage from monologue if it looked like an answer
-                            log.error("agent_run_produced_no_text", fallback="salvaging_from_thinking")
+            critique_prompt = (
+                f"Review your draft response below and refine it if needed.\n\n"
+                f'Draft: "{final_text}"\n\n'
+                f"Rules:\n"
+                f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
+                f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
+                f"- If the draft is already perfect, output it exactly as-is."
+            )
 
-                            # Remove thinking tags and see if there's anything useful
-                            salvaged = re.sub(r"<thinking>.*?</thinking>", "", monologue_text, flags=re.DOTALL).strip()
-                            if not salvaged and monologue_text:
-                                # If it was ALL thinking but had good content inside, extract it
-                                salvaged = monologue_text.replace("<thinking>", "").replace("</thinking>", "").strip()
+            critique_messages = messages + [{"role": "user", "content": critique_prompt}]
+            with tracer.start_as_current_span("agent.critique"):
+                refined_response: ProviderResponse = await self.provider.generate_response(
+                    model=model, system=full_system_prompt, messages=critique_messages, tools=[]
+                )
 
-                            refined_text = salvaged or "I acknowledge your message. (Personality online)"
+            refined_text = refined_response.text().strip()
+            log.info("phase_critique_done", refined_length=len(refined_text))
 
-                    await self._archive_trace(refined_text, "message", {"role": "assistant"})
-                    return refined_text
+            if not refined_text:
+                if final_text:
+                    log.warning("critique_returned_empty", fallback="using_final_text")
+                    refined_text = final_text
+                else:
+                    # If even Phase 2 was empty, salvage from monologue if it looked like an answer
+                    log.error("agent_run_produced_no_text", fallback="salvaging_from_thinking")
+
+                    # Remove thinking tags and see if there's anything useful
+                    salvaged = re.sub(r"<thinking>.*?</thinking>", "", monologue_text, flags=re.DOTALL).strip()
+                    if not salvaged and monologue_text:
+                        # If it was ALL thinking but had good content inside, extract it
+                        salvaged = monologue_text.replace("<thinking>", "").replace("</thinking>", "").strip()
+
+                    refined_text = salvaged or "I acknowledge your message. (Personality online)"
+
+            await self._archive_trace(refined_text, "message", {"role": "assistant"})
+            return refined_text
 
     async def stream_run(self, message: str, model: str | None = None):
         """Async generator that yields SSE event dicts during the agent cycle.
@@ -352,7 +414,15 @@ class AgentLoop:
             full_system_prompt += (
                 "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
             )
-        full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
+        full_system_prompt += (
+            "\n\n# IDENTITY REINFORCEMENT\n"
+            "Remember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently.\n\n"
+            "# TOOL USE RULES\n"
+            "You have real tools available. When you need data (status, files, etc.), "
+            "you MUST invoke tools through the function call mechanism. "
+            "NEVER write tool results in your text response — that is fabrication. "
+            "If you want to call a tool, emit a functionCall; do NOT describe the call in prose."
+        )
 
         messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
         tool_definitions = [tool.definition for tool in self.tools.values()]
@@ -386,13 +456,23 @@ class AgentLoop:
 
             messages.append({"role": "assistant", "content": assistant_content})
 
-            if response.stop_reason == "tool_use":
+            # Execute tools if present (Gemini may return ToolUseBlock with
+            # stop_reason='end_turn' instead of 'tool_use', so check both)
+            if response.stop_reason == "tool_use" or tool_calls:
                 for tool_call in tool_calls:
                     log.info("stream_tool_call", tool=tool_call.name, input=tool_call.input)
                     yield {"event": "tool_use", "data": f"{tool_call.name}({tool_call.input})"}
 
                     if tool_call.name in self.tools:
-                        result = await self.tools[tool_call.name].execute(**tool_call.input)
+                        try:
+                            result = await self.tools[tool_call.name].execute(**tool_call.input)
+                        except Exception as exc:
+                            log.error("tool_exec_error", tool=tool_call.name, error=str(exc))
+                            result = (
+                                f"⚠️ Tool Error: {exc}\n\n"
+                                "💊 Doctor Hint: Consider using `mirai_system(action='status')` "
+                                "to check system health, or retry with adjusted parameters."
+                            )
                     else:
                         result = f"Error: Tool {tool_call.name} not found."
 
