@@ -110,14 +110,10 @@ async def cmd_usage():
         reset_label = _reset_label(m.get("reset_time")).strip()
         status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴" if pct < 100 else "⚠️"
 
-        # Emoji width normalization: ⚠️ (1) + 2 spaces = 3 columns; 🟢 (2) + 1 space = 3 columns.
-        status_field = f"{status}  " if status == "⚠️" else f"{status} "
+        # Standard: one space after emoji
+        model_part = f"{status} {m['id']:<33s}"
 
-        # 1. Model Column (status_field + original_id)
-        # Assuming status_field is 3 visual columns, id should occupy 34 to reach 37
-        model_part = f"{status_field}{m['id']:<34s}"
-
-        # 2. Quota Column (bar(20) + space + pct(5.1) + space) = 28
+        # Quota part: bar(20) + space(1) + pct(5.1) + space(1) = 28
         quota_part = f"{bar} {pct:5.1f}% "
 
         print(f"  {model_part}  {quota_part}  {reset_label}")
