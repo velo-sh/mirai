@@ -129,10 +129,15 @@ async def lifespan(app_instance: FastAPI):
         if config.feishu.enabled and config.feishu.app_id and config.feishu.app_secret:
             from mirai.agent.im.feishu_receiver import FeishuEventReceiver
 
-            async def handle_feishu_message(sender_id: str, text: str, chat_id: str) -> str:
-                """Route incoming Feishu messages to AgentLoop."""
+            async def handle_feishu_message(
+                sender_id: str,
+                text: str,
+                chat_id: str,
+                history: list[dict],
+            ) -> str:
+                """Route incoming Feishu messages to AgentLoop with conversation history."""
                 if agent:
-                    return await agent.run(text)
+                    return await agent.run(text, history=history)
                 return "Agent is not initialized."
 
             receiver = FeishuEventReceiver(
