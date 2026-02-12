@@ -64,6 +64,7 @@ mirai.db
 mirai_vectors/
 mirai_hdd.duckdb
 mirai_hdd.duckdb.wal
+config.toml
 
 # Flask stuff:
 instance/
