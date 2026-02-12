@@ -2,14 +2,14 @@ import asyncio
 
 from mirai.collaborator.manager import CollaboratorManager
 from mirai.collaborator.models import CollaboratorCreate
-from mirai.db.session import async_session, init_db
+from mirai.db.session import get_session, init_db
 
 
 async def seed():
     print("Seeding initial collaborator 'Mira'...")
     await init_db()
 
-    async with async_session() as session:
+    async for session in get_session():
         manager = CollaboratorManager(session)
 
         # Check if Mira exists

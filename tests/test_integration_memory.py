@@ -7,7 +7,7 @@ from mirai.agent.providers import MockProvider
 from mirai.agent.tools.memory import MemorizeTool
 from mirai.collaborator.manager import CollaboratorManager
 from mirai.collaborator.models import CollaboratorCreate
-from mirai.db.session import async_session, init_db
+from mirai.db.session import get_session, init_db
 
 
 @pytest.mark.asyncio
@@ -18,7 +18,7 @@ async def test_memory_isolation_between_collaborators():
     await init_db()
 
     # 1. Setup two distinct collaborators
-    async with async_session() as session:
+    async for session in get_session():
         manager = CollaboratorManager(session)
 
         collab_a_id = "01AN4Z048A_A_A_A_A_A_A_A_A"
