@@ -7,6 +7,7 @@ and identity-anchored system prompts.
 
 import os
 import re
+import shutil
 from collections.abc import Sequence
 from typing import Any
 
@@ -83,9 +84,31 @@ class AgentLoop:
         )
         return trace_id
 
+    async def update_soul(self, new_content: str) -> bool:
+        """Update the SOUL.md file with new content.
+
+        This enables autonomous evolution of the collaborator's identity.
+        """
+        soul_path = f"mirai/collaborator/{self.collaborator_id}_SOUL.md"
+        try:
+            # Create a backup before overwriting
+            if os.path.exists(soul_path):
+                shutil.copy2(soul_path, f"{soul_path}.bak")
+
+            with open(soul_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+
+            # Update local state immediately
+            self.soul_content = new_content
+            log.info("soul_updated_successfully", collaborator=self.collaborator_id)
+            return True
+        except Exception as e:
+            log.error("soul_update_failed", error=str(e))
+            return False
+
     async def run(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> str:
@@ -109,7 +132,7 @@ class AgentLoop:
 
     async def _run_impl(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> str:
@@ -119,7 +142,13 @@ class AgentLoop:
             # 0. Reload SOUL per-request for adaptive identity
             self.soul_content = _load_soul(self.collaborator_id)
 
-            span.set_attribute("message.length", len(message))
+            msg_text = ""
+            if isinstance(message, str):
+                msg_text = message
+            elif isinstance(message, list):
+                msg_text = " ".join(b["text"] for b in message if b.get("type") == "text")
+
+            span.set_attribute("message.length", len(msg_text))
             if history:
                 span.set_attribute("history.turns", len(history))
 
@@ -127,10 +156,10 @@ class AgentLoop:
             model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
 
             # 1. Archive incoming user message
-            await self._archive_trace(message, "message", {"role": "user"})
+            await self._archive_trace(str(message), "message", {"role": "user"})
 
             # 2. Total Recall: Semantic search in L2 (RAM)
-            query_vector = await self.embedder.get_embeddings(message)
+            query_vector = await self.embedder.get_embeddings(msg_text)
             memories = await self.l2_storage.search(
                 vector=query_vector, limit=3, filter=f"collaborator_id = '{self.collaborator_id}'"
             )

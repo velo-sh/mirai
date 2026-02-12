@@ -6,6 +6,7 @@ Maintains per-chat conversation history for multi-turn context.
 """
 
 import asyncio
+import base64
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 import lark_oapi as lark
 import orjson
 from lark_oapi.api.im.v1 import (
+    GetMessageResourceRequest,
     P2ImMessageReceiveV1,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
@@ -30,7 +32,7 @@ class FeishuEventReceiver:
         self,
         app_id: str,
         app_secret: str,
-        message_handler: Callable[[str, str, str, list[dict]], Awaitable[str]],
+        message_handler: Callable[[str, str | list[dict[str, Any]], str, list[dict]], Awaitable[str]],
         storage: Any = None,
         encrypt_key: str = "",
         verification_token: str = "",
@@ -113,33 +115,48 @@ class FeishuEventReceiver:
             message = event.message
             sender = event.sender
 
-            # Extract text content
+            # Extract content based on message type
             msg_type = message.message_type
-            if msg_type != "text":
-                log.info("feishu_ignore_nontext", msg_type=msg_type)
-                return
-
-            content = orjson.loads(message.content)
-            text = content.get("text", "").strip()
-            if not text:
-                return
-
             sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
             message_id = message.message_id
             chat_id = message.chat_id
 
-            log.info("feishu_msg_received", sender=sender_id, text=text[:50], msg_id=message_id)
+            content_dict = orjson.loads(message.content)
+
+            if msg_type == "text":
+                text = content_dict.get("text", "").strip()
+                if not text:
+                    return
+                message_content: str | list[dict[str, Any]] = text
+                log.info("feishu_msg_received", sender=sender_id, text=text[:50], msg_id=message_id)
+            elif msg_type == "image":
+                image_key = content_dict.get("image_key")
+                if not image_key:
+                    return
+
+                # Create multi-part message with text placeholder and image
+                # We'll download the image in the background processing
+                message_content = [
+                    {"type": "text", "text": "[Image message]"},
+                    {"type": "image", "image_key": image_key, "msg_id": message_id},
+                ]
+                log.info("feishu_image_received", sender=sender_id, image_key=image_key, msg_id=message_id)
+            else:
+                log.info("feishu_ignore_msg_type", msg_type=msg_type)
+                return
 
             # Schedule the async handler on the main event loop
             if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    self._process_and_reply(text, sender_id, message_id, chat_id),
+                    self._process_and_reply(message_content, sender_id, message_id, chat_id),
                     self._loop,
                 )
         except Exception as e:
             log.error("feishu_msg_process_error", error=str(e), exc_info=True)
 
-    async def _process_and_reply(self, text: str, sender_id: str, message_id: str, chat_id: str) -> None:
+    async def _process_and_reply(
+        self, message_content: str | list[dict[str, Any]], sender_id: str, message_id: str, chat_id: str
+    ) -> None:
         """Process the message through AgentLoop and reply.
 
         Flow:
@@ -179,10 +196,35 @@ class FeishuEventReceiver:
                     history = []
                     self._conversations[chat_id] = history
 
-            log.info("conversation_context", chat_id=chat_id, history_turns=len(history) // 2)
-
             # Step 3: Process the message through AgentLoop with history
-            reply_text = await self._message_handler(sender_id, text, chat_id, history)
+            # If message is a list, process image blocks
+            processed_content: str | list[dict[str, Any]] = message_content
+            if isinstance(message_content, list):
+                new_content = []
+                for block in message_content:
+                    if block.get("type") == "image":
+                        image_key = block["image_key"]
+                        msg_id = block["msg_id"]
+                        log.info("downloading_image", image_key=image_key)
+                        image_data = await self._download_image(msg_id, image_key)
+                        if image_data:
+                            new_content.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",  # Feishu images are generally returned as a stream
+                                        "data": base64.b64encode(image_data).decode(),
+                                    },
+                                }
+                            )
+                        else:
+                            new_content.append({"type": "text", "text": "[Image download failed]"})
+                    else:
+                        new_content.append(block)
+                processed_content = new_content
+
+            reply_text = await self._message_handler(sender_id, processed_content, chat_id, history)
 
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
@@ -206,12 +248,30 @@ class FeishuEventReceiver:
                 log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
 
             # Step 5: Record this exchange in conversation history
-            await self._record_exchange(chat_id, text, reply_text)
+            await self._record_exchange(chat_id, processed_content, reply_text)
 
         except Exception as e:
             log.error("feishu_reply_error", error=str(e), exc_info=True)
 
-    async def _record_exchange(self, chat_id: str, user_msg: str, assistant_msg: str) -> None:
+    async def _download_image(self, message_id: str, image_key: str) -> bytes | None:
+        """Download image resource from Feishu."""
+        try:
+            request = (
+                GetMessageResourceRequest.builder().message_id(message_id).file_key(image_key).type("image").build()
+            )
+            response = await self._reply_client.im.v1.message.aget_resource(request)  # type: ignore[union-attr]
+            if response.success():
+                from typing import cast
+
+                return cast(bytes, response.raw.read())
+            else:
+                log.error("feishu_image_download_failed", code=response.code, msg=response.msg)
+                return None
+        except Exception as e:
+            log.error("feishu_image_download_error", error=str(e))
+            return None
+
+    async def _record_exchange(self, chat_id: str, user_msg: str | list[dict[str, Any]], assistant_msg: str) -> None:
         """Append a user/assistant exchange to the chat's conversation history.
 
         Maintains a rolling window of MAX_HISTORY_TURNS messages to prevent
@@ -221,18 +281,22 @@ class FeishuEventReceiver:
             self._conversations[chat_id] = []
 
         history = self._conversations[chat_id]
-        history.append({"role": "user", "content": user_msg})
+
+        # Convert list content to string for L3 storage if needed
+        # (Though current L3 implementation handles strings)
+        user_msg_str = str(user_msg)
+
+        history.append({"role": "user", "content": user_msg_str})
         history.append({"role": "assistant", "content": assistant_msg})
 
-        # Save to persistent storage if available
+        # Trim history
+        if len(history) > self.MAX_HISTORY_TURNS * 2:
+            self._conversations[chat_id] = history[-(self.MAX_HISTORY_TURNS * 2) :]
+
+        # Also persist to L3 storage
         if self._storage:
             try:
-                await self._storage.save_feishu_history(chat_id, "user", user_msg)
+                await self._storage.save_feishu_history(chat_id, "user", user_msg_str)
                 await self._storage.save_feishu_history(chat_id, "assistant", assistant_msg)
             except Exception as e:
                 log.error("history_save_failed", chat_id=chat_id, error=str(e))
-
-        # Trim to max turns (each turn = 2 messages: user + assistant)
-        max_messages = self.MAX_HISTORY_TURNS * 2
-        if len(history) > max_messages:
-            self._conversations[chat_id] = history[-max_messages:]

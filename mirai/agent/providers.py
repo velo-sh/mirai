@@ -179,6 +179,17 @@ class AntigravityProvider:
                     if isinstance(block, dict):
                         if block.get("type") == "text":
                             parts.append({"text": block["text"]})
+                        elif block.get("type") == "image":
+                            source = block.get("source", {})
+                            if source.get("type") == "base64":
+                                parts.append(
+                                    {
+                                        "inlineData": {
+                                            "mimeType": source.get("media_type", "image/png"),
+                                            "data": source.get("data", ""),
+                                        }
+                                    }
+                                )
                         elif block.get("type") == "tool_use":
                             parts.append(
                                 {  # type: ignore[dict-item]
