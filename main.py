@@ -1,21 +1,30 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from dotenv import load_dotenv
 import uvicorn
 import os
+import asyncio
 from typing import Optional
+from contextlib import asynccontextmanager
+
+load_dotenv()
 
 from mirai.agent.providers import AnthropicProvider
 from mirai.agent.loop import AgentLoop
 from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.workspace import WorkspaceTool
 from mirai.agent.heartbeat import HeartbeatManager
+from mirai.db.session import init_db
+
+class ChatRequest(BaseModel):
+    message: str
 
 # Global instances
 agent: Optional[AgentLoop] = None
 heartbeat: Optional[HeartbeatManager] = None
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app_instance: FastAPI):
     global agent, heartbeat
     # Initialize SQLite tables
     await init_db()
@@ -35,18 +44,44 @@ async def lifespan(app: FastAPI):
         
         # Start Heartbeat with Optional IM Integration
         feishu_webhook = os.getenv("FEISHU_WEBHOOK_URL")
+        feishu_app_id = os.getenv("FEISHU_APP_ID")
+        feishu_app_secret = os.getenv("FEISHU_APP_SECRET")
+
         im_provider = None
-        if feishu_webhook:
+        if feishu_app_id and feishu_app_secret:
+            from mirai.agent.im.feishu import FeishuProvider
+            im_provider = FeishuProvider(app_id=feishu_app_id, app_secret=feishu_app_secret)
+            print("Feishu IM notification enabled via App API (chat auto-discovery).")
+        elif feishu_webhook:
             from mirai.agent.im.feishu import FeishuProvider
             im_provider = FeishuProvider(webhook_url=feishu_webhook)
             print("Feishu IM notification enabled via Webhook.")
 
+        heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", "120"))
         heartbeat = HeartbeatManager(
-            agent, 
-            interval_seconds=120, 
-            im_provider=im_provider
-        ) 
+            agent,
+            interval_seconds=heartbeat_interval,
+            im_provider=im_provider,
+        )
         await heartbeat.start()
+
+        # Start Feishu WebSocket receiver for private/group chat
+        if feishu_app_id and feishu_app_secret:
+            from mirai.agent.im.feishu_receiver import FeishuEventReceiver
+
+            async def handle_feishu_message(sender_id: str, text: str, chat_id: str) -> str:
+                """Route incoming Feishu messages to AgentLoop."""
+                if agent:
+                    return await agent.run(text)
+                return "Agent is not initialized."
+
+            receiver = FeishuEventReceiver(
+                app_id=feishu_app_id,
+                app_secret=feishu_app_secret,
+                message_handler=handle_feishu_message,
+            )
+            receiver.start(loop=asyncio.get_running_loop())
+            print("Feishu WebSocket receiver started. You can now chat with Mira!")
         
     except Exception as e:
         print(f"Warning: Failed to initialize AgentLoop: {e}")
@@ -55,6 +90,8 @@ async def lifespan(app: FastAPI):
     yield
     if heartbeat:
         await heartbeat.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health_check():
