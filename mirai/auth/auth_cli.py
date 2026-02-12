@@ -82,15 +82,8 @@ async def cmd_usage():
     project = usage.get("project") or "Unknown"
     email = creds.get("email") or "Unknown"
     print(f"  Account:  {email}")
-    print(f"  Plan:     {plan}")
-    print(f"  Project:  {project}")
-
-    # Credits
-    monthly = usage.get("credits_monthly")
-    available = usage.get("credits_available")
-    if monthly and available is not None:
-        used_pct = ((monthly - available) / monthly) * 100
-        print(f"  Credits:  {available:.0f} / {monthly:.0f} ({used_pct:.0f}% used)")
+    print(f"  Plan:     {plan:<10s}")
+    print(f"  Project:  {project:<10s}")
     print()
 
     # Model quotas
@@ -108,15 +101,26 @@ async def cmd_usage():
     # Sort: most used first, then alphabetical
     visible.sort(key=lambda m: (-m["used_pct"], m["id"]))
 
-    print(f"  {'Model':<37s}  {'Quota':<27s}  Reset")
-    print(f"  {'─' * 37}  {'─' * 27}  {'─' * 18}")
+    # Table Header
+    print(f"  {'Model':<37s}  {'Quota':<28s}  Reset")
+    print(f"  {'─' * 37}  {'─' * 28}  {'─' * 18}")
     for m in visible:
         pct = m["used_pct"]
         bar = _bar(pct)
-        reset = _reset_label(m.get("reset_time"))
+        reset_label = _reset_label(m.get("reset_time")).strip()
         status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴" if pct < 100 else "⚠️"
-        # status (2 cells) + space (1) + id (34 cells) = 37 columns
-        print(f"  {status} {m['id']:<34s}  {bar} {pct:5.1f}%  {reset}")
+
+        # Emoji width normalization: ⚠️ (1) + 2 spaces = 3 columns; 🟢 (2) + 1 space = 3 columns.
+        status_field = f"{status}  " if status == "⚠️" else f"{status} "
+
+        # 1. Model Column (status_field + original_id)
+        # Assuming status_field is 3 visual columns, id should occupy 34 to reach 37
+        model_part = f"{status_field}{m['id']:<34s}"
+
+        # 2. Quota Column (bar(20) + space + pct(5.1) + space) = 28
+        quota_part = f"{bar} {pct:5.1f}% "
+
+        print(f"  {model_part}  {quota_part}  {reset_label}")
 
     print()
 
