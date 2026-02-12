@@ -9,11 +9,14 @@ import asyncio
 import base64
 import threading
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import lark_oapi as lark
 import orjson
 from lark_oapi.api.im.v1 import (
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
+    Emoji,
     GetMessageResourceRequest,
     P2ImMessageReceiveV1,
     ReplyMessageRequest,
@@ -81,6 +84,9 @@ class FeishuEventReceiver:
         event_handler = (
             lark.EventDispatcherHandler.builder(self._encrypt_key, self._verification_token)
             .register_p2_im_message_receive_v1(self._on_message_received)
+            .register_p2_im_message_reaction_created_v1(lambda data: None)  # ignore reaction events
+            .register_p2_im_message_reaction_deleted_v1(lambda data: None)
+            .register_p2_im_message_message_read_v1(lambda data: None)
             .build()
         )
 
@@ -128,7 +134,14 @@ class FeishuEventReceiver:
                 if not text:
                     return
                 message_content: str | list[dict[str, Any]] = text
-                log.info("feishu_msg_received", sender=sender_id, text=text[:50], msg_id=message_id)
+                log.info(
+                    "feishu_msg_received",
+                    sender=sender_id,
+                    text=text[:50],
+                    msg_id=message_id,
+                    chat_id=chat_id,
+                    msg_type=msg_type,
+                )
             elif msg_type == "image":
                 image_key = content_dict.get("image_key")
                 if not image_key:
@@ -141,6 +154,26 @@ class FeishuEventReceiver:
                     {"type": "image", "image_key": image_key, "msg_id": message_id},
                 ]
                 log.info("feishu_image_received", sender=sender_id, image_key=image_key, msg_id=message_id)
+            elif msg_type == "post":
+                # Feishu "post" is a rich text structure
+                # content: {"title": "", "content": [[{"tag": "text", "text": "..."}, ...], ...]}
+                post_content = content_dict.get("content", [])
+                text_parts = []
+                for paragraph in post_content:
+                    for element in paragraph:
+                        if element.get("tag") == "text":
+                            text_parts.append(element.get("text", ""))
+                        elif element.get("tag") == "a":
+                            text_parts.append(element.get("text", ""))  # Link text
+                        elif element.get("tag") == "at":
+                            text_parts.append(element.get("at_name", ""))  # @Name
+                    text_parts.append("\n")  # Paragraph break
+
+                text = "".join(text_parts).strip()
+                if not text:
+                    return
+                message_content = text
+                log.info("feishu_post_received", sender=sender_id, text=text[:50], msg_id=message_id)
             else:
                 log.info("feishu_ignore_msg_type", msg_type=msg_type)
                 return
@@ -166,23 +199,23 @@ class FeishuEventReceiver:
         4. Record the exchange in conversation history
         """
         try:
-            # Step 1: Send "Thinking..." placeholder immediately
-            placeholder_request = (
-                ReplyMessageRequest.builder()
+            # Step 1: Send "Thinking..." reaction immediately
+            reaction_request = (
+                CreateMessageReactionRequest.builder()
                 .message_id(message_id)
                 .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .msg_type("text")
-                    .content(orjson.dumps({"text": "🤔 Thinking..."}).decode())
+                    CreateMessageReactionRequestBody.builder()
+                    .reaction_type(Emoji.builder().emoji_type("THINKING").build())
                     .build()
                 )
                 .build()
             )
-            placeholder_resp = await self._reply_client.im.v1.message.areply(placeholder_request)  # type: ignore[union-attr]
-            if placeholder_resp.success():
-                log.info("feishu_typing_sent", msg_id=message_id)
+            # Use the same client (ReplyClient is used for messages, but reactions are also in im.v1)
+            reaction_resp = await self._reply_client.im.v1.message_reaction.acreate(reaction_request)  # type: ignore[union-attr]
+            if reaction_resp.success():
+                log.info("feishu_thinking_reaction_sent", msg_id=message_id)
             else:
-                log.error("feishu_typing_failed", code=placeholder_resp.code, msg=placeholder_resp.msg)
+                log.error("feishu_reaction_failed", code=reaction_resp.code, msg=reaction_resp.msg)
 
             # Step 2: Get conversation history for this chat
             history = self._conversations.get(chat_id)
@@ -229,7 +262,7 @@ class FeishuEventReceiver:
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
 
-            # Step 4: Send the real response as a new reply
+            # Step 4: Send the real response (using reply to maintain thread context)
             reply_request = (
                 ReplyMessageRequest.builder()
                 .message_id(message_id)
@@ -254,21 +287,32 @@ class FeishuEventReceiver:
             log.error("feishu_reply_error", error=str(e), exc_info=True)
 
     async def _download_image(self, message_id: str, image_key: str) -> bytes | None:
-        """Download image resource from Feishu."""
+        """Download image resource from Feishu with robust async handling."""
         try:
             request = (
                 GetMessageResourceRequest.builder().message_id(message_id).file_key(image_key).type("image").build()
             )
-            response = await self._reply_client.im.v1.message.aget_resource(request)  # type: ignore[union-attr]
-            if response.success():
-                from typing import cast
+            response = await self._reply_client.im.v1.message_resource.aget(request)  # type: ignore[union-attr]
 
-                return cast(bytes, response.raw.read())
-            else:
-                log.error("feishu_image_download_failed", code=response.code, msg=response.msg)
+            if not response.success():
+                log.error("feishu_image_download_failed", code=response.code, msg=response.msg, msg_id=message_id)
                 return None
+
+            # lark-oapi stores the binary content in response.file (as a BytesIO)
+            # or in response.raw.content (as bytes)
+            if response.file:
+                # Ensure we read from the beginning
+                response.file.seek(0)
+                return cast(bytes, response.file.read())
+
+            if hasattr(response.raw, "content") and response.raw.content:
+                return cast(bytes, response.raw.content)
+
+            log.warning("feishu_image_download_empty", msg_id=message_id)
+            return None
+
         except Exception as e:
-            log.error("feishu_image_download_error", error=str(e))
+            log.error("feishu_image_download_error", error=str(e), msg_id=message_id)
             return None
 
     async def _record_exchange(self, chat_id: str, user_msg: str | list[dict[str, Any]], assistant_msg: str) -> None:

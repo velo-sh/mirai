@@ -36,9 +36,9 @@ class FeishuProvider(BaseIMProvider):
     # ------------------------------------------------------------------
     # Auto-discovery: list groups the bot has joined
     # ------------------------------------------------------------------
-    async def _discover_chat_id(self) -> str | None:
-        """Fetch the first group chat the bot belongs to (cached)."""
-        if self._default_chat_id:
+    async def _discover_chat_id(self, prefer_p2p: bool = False) -> str | None:
+        """Fetch the first group chat or p2p chat the bot belongs to (cached)."""
+        if self._default_chat_id and not prefer_p2p:
             return self._default_chat_id
 
         if not self.client:
@@ -53,13 +53,34 @@ class FeishuProvider(BaseIMProvider):
                 return None
 
             items = response.data.items if response.data else []
-            if items:
-                self._default_chat_id = items[0].chat_id
-                log.info("feishu_chat_discovered", name=items[0].name, chat_id=self._default_chat_id)
-                return self._default_chat_id
+            if not items:
+                log.warning("feishu_no_chats")
+                return None
 
-            log.warning("feishu_no_chats")
-            return None
+            # Prioritization logic:
+            # 1. If prefer_p2p is True, look for p2p chats first
+            if prefer_p2p:
+                p2p_chats = [
+                    c for c in items if getattr(c, "chat_mode", None) == "p2p" or getattr(c, "type", None) == "p2p"
+                ]
+                if p2p_chats:
+                    chat_id = p2p_chats[0].chat_id
+                    log.info("feishu_p2p_chat_discovered", chat_id=chat_id)
+                    return str(chat_id) if chat_id else None
+
+                # Attempt discovery of private window via owner_id if it looks like an open_id
+                for c in items:
+                    if getattr(c, "owner_id", "").startswith("ou_"):
+                        target = c.owner_id
+                        log.info("feishu_p2p_owner_id_selected_as_target", open_id=target)
+                        return str(target) if target else None
+
+                log.info("feishu_p2p_not_found_falling_back_to_first_available")
+
+            # Fallback to the first item (default behavior)
+            self._default_chat_id = items[0].chat_id
+            log.info("feishu_chat_discovered", name=items[0].name, chat_id=self._default_chat_id)
+            return str(self._default_chat_id) if self._default_chat_id else None
 
         except Exception as e:
             log.error("feishu_discovery_error", error=str(e))
@@ -68,12 +89,12 @@ class FeishuProvider(BaseIMProvider):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    async def send_message(self, content: str, chat_id: str = None) -> bool:
+    async def send_message(self, content: str, chat_id: str = None, prefer_p2p: bool = False) -> bool:
         """Send a text message.
 
         Resolution order:
         1. Explicit chat_id argument
-        2. Auto-discovered chat_id (first group the bot joined)
+        2. Auto-discovered chat_id (p2p or group)
         3. Fallback to webhook
         """
         # --- Webhook shortcut (no client needed) ---
@@ -82,7 +103,7 @@ class FeishuProvider(BaseIMProvider):
 
         # --- App API path ---
         if self.client:
-            target = chat_id or await self._discover_chat_id()
+            target = chat_id or await self._discover_chat_id(prefer_p2p=prefer_p2p)
             if target:
                 return await self._send_app_message(target, "text", orjson.dumps({"text": content}).decode())
 
@@ -92,13 +113,13 @@ class FeishuProvider(BaseIMProvider):
 
         return False
 
-    async def send_card(self, card_content: dict, chat_id: str = None) -> bool:
+    async def send_card(self, card_content: dict, chat_id: str = None, prefer_p2p: bool = False) -> bool:
         """Send an interactive card message."""
         if self.webhook_url and not self.client:
             return await self._send_via_webhook("interactive", card_content)
 
         if self.client:
-            target = chat_id or await self._discover_chat_id()
+            target = chat_id or await self._discover_chat_id(prefer_p2p=prefer_p2p)
             if target:
                 return await self._send_app_message(target, "interactive", orjson.dumps(card_content).decode())
 
@@ -110,15 +131,23 @@ class FeishuProvider(BaseIMProvider):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    async def _send_app_message(self, chat_id: str, msg_type: str, content_json: str) -> bool:
+    async def _send_app_message(self, receive_id: str, msg_type: str, content_json: str) -> bool:
         """Send a message via the App API."""
         try:
+            # Detect receive_id type
+            # oc_ = chat_id, ou_ = open_id, us_ = user_id
+            receive_id_type = "chat_id"
+            if receive_id.startswith("ou_"):
+                receive_id_type = "open_id"
+            elif receive_id.startswith("us_"):
+                receive_id_type = "user_id"
+
             request = (
                 CreateMessageRequest.builder()  # type: ignore[name-defined]  # noqa: F405
-                .receive_id_type("chat_id")
+                .receive_id_type(receive_id_type)
                 .request_body(
                     CreateMessageRequestBody.builder()  # type: ignore[name-defined]  # noqa: F405
-                    .receive_id(chat_id)
+                    .receive_id(receive_id)
                     .msg_type(msg_type)
                     .content(content_json)
                     .build()

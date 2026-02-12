@@ -53,6 +53,7 @@ class ProviderResponse(BaseModel):
 
     content: list[ContentBlock]
     stop_reason: str = "end_turn"
+    model_id: str | None = None  # The actual model ID used (e.g., if failover occurred)
 
     def text(self) -> str:
         """Extract concatenated text from all TextBlocks."""
