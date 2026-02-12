@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import os
+import time
 import anthropic
 
 class AnthropicProvider:
@@ -23,6 +24,315 @@ class AnthropicProvider:
             tools=tools,
             max_tokens=4096,
         )
+
+
+class AntigravityProvider:
+    """
+    Routes Claude/Gemini API calls through Google Cloud Code Assist.
+    
+    Uses the v1internal:streamGenerateContent endpoint at cloudcode-pa.googleapis.com.
+    Messages are sent in Google Generative AI format (contents/parts) and responses
+    are parsed back to Anthropic-compatible objects for AgentLoop compatibility.
+    """
+
+    DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com"
+    DAILY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
+    ENDPOINTS = [DEFAULT_ENDPOINT, DAILY_ENDPOINT]
+
+    DEFAULT_MODEL = "claude-sonnet-4-5-20250514"
+    ANTIGRAVITY_VERSION = "1.15.8"
+
+    # Model name mapping from Anthropic SDK names to Cloud Code Assist names
+    MODEL_MAP = {
+        "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
+        "claude-3-5-sonnet-latest": "claude-sonnet-4-5",
+        "claude-3-7-sonnet-20250219": "claude-sonnet-4-5",
+        "claude-3-7-sonnet-latest": "claude-sonnet-4-5",
+        "claude-3-opus-20240229": "claude-opus-4-5-thinking",
+        "claude-3-5-haiku-20241022": "claude-sonnet-4-5",
+        "claude-3-haiku-20240307": "claude-sonnet-4-5",
+    }
+
+    def __init__(self, credentials: Optional[dict] = None):
+        import httpx
+        from mirai.auth.antigravity_auth import load_credentials
+        self.credentials = credentials or load_credentials()
+        if not self.credentials:
+            raise FileNotFoundError(
+                "No Antigravity credentials found. "
+                "Run `python -m mirai.auth.auth_cli` to authenticate."
+            )
+        self._http = httpx.AsyncClient(timeout=120.0)
+
+    async def _ensure_fresh_token(self):
+        """Refresh the access token if expired."""
+        if time.time() >= self.credentials.get("expires", 0):
+            from mirai.auth.antigravity_auth import refresh_access_token, save_credentials
+            print("[antigravity] Access token expired, refreshing...")
+            refreshed = await refresh_access_token(self.credentials["refresh"])
+            self.credentials["access"] = refreshed["access"]
+            self.credentials["expires"] = refreshed["expires"]
+            save_credentials(self.credentials)
+            print("[antigravity] Token refreshed.")
+
+    def _build_headers(self) -> dict:
+        """Build request headers for Cloud Code Assist."""
+        import json as _json
+        return {
+            "Authorization": f"Bearer {self.credentials['access']}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "User-Agent": f"antigravity/{self.ANTIGRAVITY_VERSION} darwin/arm64",
+            "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+            "Client-Metadata": _json.dumps({
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }),
+        }
+
+    @staticmethod
+    def _convert_messages(messages: List[Dict[str, Any]]) -> list:
+        """Convert Anthropic-format messages to Google Generative AI format."""
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            parts = []
+            content = msg.get("content", "")
+
+            if isinstance(content, str):
+                parts.append({"text": content})
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            parts.append({"text": block["text"]})
+                        elif block.get("type") == "tool_use":
+                            parts.append({
+                                "functionCall": {
+                                    "name": block["name"],
+                                    "args": block.get("input", {}),
+                                }
+                            })
+                        elif block.get("type") == "tool_result":
+                            result_text = block.get("content", "")
+                            if isinstance(result_text, list):
+                                result_text = " ".join(
+                                    b.get("text", "") for b in result_text
+                                    if isinstance(b, dict) and b.get("type") == "text"
+                                )
+                            parts.append({
+                                "functionResponse": {
+                                    "name": block.get("tool_use_id", "unknown"),
+                                    "response": {"result": str(result_text)},
+                                }
+                            })
+
+            if parts:
+                contents.append({"role": role, "parts": parts})
+        return contents
+
+    @staticmethod
+    def _convert_tools(tools: List[Dict[str, Any]]) -> list:
+        """Convert Anthropic-format tools to Google Generative AI format."""
+        if not tools:
+            return []
+        declarations = []
+        for tool in tools:
+            decl = {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+            }
+            schema = tool.get("input_schema", {})
+            if schema:
+                decl["parameters"] = schema
+            declarations.append(decl)
+        return [{"functionDeclarations": declarations}]
+
+    def _build_request(
+        self, model: str, system: str,
+        messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+        max_tokens: int = 4096,
+    ) -> dict:
+        """Build the Cloud Code Assist request body."""
+        import random
+        contents = self._convert_messages(messages)
+        request = {"contents": contents}
+
+        if system:
+            request["systemInstruction"] = {
+                "parts": [{"text": system}],
+            }
+
+        request["generationConfig"] = {"maxOutputTokens": max_tokens}
+
+        google_tools = self._convert_tools(tools)
+        if google_tools:
+            request["tools"] = google_tools
+
+        project_id = self.credentials.get("project_id", "")
+        return {
+            "project": project_id,
+            "model": model,
+            "request": request,
+            "requestType": "agent",
+            "userAgent": "antigravity",
+            "requestId": f"agent-{int(time.time())}-{random.randbytes(4).hex()}",
+        }
+
+    @staticmethod
+    def _parse_sse_response(raw_text: str) -> dict:
+        """
+        Parse SSE stream response and build Anthropic-compatible response object.
+        Returns a dict with 'content' list and 'stop_reason'.
+        """
+        from types import SimpleNamespace
+        import json as _json
+
+        content_blocks = []
+        stop_reason = "end_turn"
+        tool_call_counter = 0
+
+        for line in raw_text.split("\n"):
+            if not line.startswith("data:"):
+                continue
+            json_str = line[5:].strip()
+            if not json_str:
+                continue
+            try:
+                chunk = _json.loads(json_str)
+            except _json.JSONDecodeError:
+                continue
+
+            response_data = chunk.get("response")
+            if not response_data:
+                continue
+
+            candidate = None
+            candidates = response_data.get("candidates", [])
+            if candidates:
+                candidate = candidates[0]
+
+            if candidate and candidate.get("content", {}).get("parts"):
+                for part in candidate["content"]["parts"]:
+                    if "text" in part:
+                        # Merge consecutive text blocks
+                        if content_blocks and content_blocks[-1].type == "text":
+                            content_blocks[-1].text += part["text"]
+                        else:
+                            content_blocks.append(
+                                SimpleNamespace(type="text", text=part["text"])
+                            )
+                    if "functionCall" in part:
+                        fc = part["functionCall"]
+                        tool_call_counter += 1
+                        call_id = fc.get("id", f"{fc['name']}_{int(time.time())}_{tool_call_counter}")
+                        content_blocks.append(SimpleNamespace(
+                            type="tool_use",
+                            id=call_id,
+                            name=fc["name"],
+                            input=fc.get("args", {}),
+                        ))
+                        stop_reason = "tool_use"
+
+            if candidate and candidate.get("finishReason"):
+                fr = candidate["finishReason"]
+                if fr == "STOP":
+                    stop_reason = "end_turn"
+                elif fr == "MAX_TOKENS":
+                    stop_reason = "max_tokens"
+
+        if not content_blocks:
+            content_blocks.append(SimpleNamespace(type="text", text=""))
+
+        return SimpleNamespace(content=content_blocks, stop_reason=stop_reason)
+
+    async def generate_response(
+        self,
+        model: str,
+        system: str,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ):
+        import asyncio
+        await self._ensure_fresh_token()
+
+        # Remap model name if needed for Cloud Code Assist
+        effective_model = self.MODEL_MAP.get(model, model)
+        if effective_model != model:
+            print(f"[antigravity] Model remapped: {model} -> {effective_model}")
+
+        body = self._build_request(effective_model, system, messages, tools)
+        headers = self._build_headers()
+
+        import json as _json
+        body_json = _json.dumps(body)
+
+        max_retries = 3
+        base_delay = 2.0
+
+        for attempt in range(max_retries + 1):
+            url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
+            try:
+                response = await self._http.post(url, content=body_json, headers=headers)
+                if response.status_code == 200:
+                    return self._parse_sse_response(response.text)
+
+                error_text = response.text[:500]
+                print(f"[antigravity] API error ({response.status_code}): {error_text}")
+
+                if response.status_code == 401:
+                    self.credentials["expires"] = 0
+                    raise Exception(f"Cloud Code Assist: authentication expired")
+
+                if response.status_code == 429 and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"[antigravity] Rate limited. Retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})...")
+                    await asyncio.sleep(delay)
+                    continue
+
+                raise Exception(f"Cloud Code Assist API error ({response.status_code}): {error_text}")
+
+            except Exception as e:
+                if attempt < max_retries and "rate" in str(e).lower():
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+
+
+
+def create_provider() -> AnthropicProvider:
+    """
+    Auto-detect and create the best available provider.
+    
+    Priority:
+    1. Antigravity credentials (~/.mirai/antigravity_credentials.json)
+    2. ANTHROPIC_API_KEY environment variable
+    """
+    # Try Antigravity first
+    from mirai.auth.antigravity_auth import load_credentials
+    creds = load_credentials()
+    if creds:
+        try:
+            provider = AntigravityProvider(credentials=creds)
+            print("Using Antigravity (Google Cloud Code Assist) provider.")
+            return provider
+        except Exception as e:
+            print(f"Antigravity provider failed: {e}. Falling back to direct API key.")
+
+    # Fall back to direct Anthropic API key
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key:
+        print("Using direct Anthropic API key provider.")
+        return AnthropicProvider(api_key=api_key)
+
+    raise ValueError(
+        "No API credentials available. Either:\n"
+        "  1. Run `python -m mirai.auth.auth_cli` for Antigravity auth, or\n"
+        "  2. Set ANTHROPIC_API_KEY environment variable."
+    )
 
 class MockEmbeddingProvider:
     """Provides consistent fake embeddings for testing."""
