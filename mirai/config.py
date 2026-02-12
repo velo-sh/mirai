@@ -114,5 +114,22 @@ class MiraiConfig(BaseSettings):
             config_path: Optional override for TOML file location.
         """
         if config_path and config_path.exists():
-            return cls(_toml_file=str(config_path))  # type: ignore[call-arg]
+            import tomllib
+
+            with open(config_path, "rb") as f:
+                toml_data = tomllib.load(f)
+            # Build nested models from TOML sections, then overlay on defaults
+            kwargs: dict[str, Any] = {}
+            section_map = {
+                "llm": LLMConfig,
+                "feishu": FeishuConfig,
+                "heartbeat": HeartbeatConfig,
+                "server": ServerConfig,
+                "database": DatabaseConfig,
+                "agent": AgentConfig,
+            }
+            for key, model_cls in section_map.items():
+                if key in toml_data:
+                    kwargs[key] = model_cls(**toml_data[key])
+            return cls(**kwargs)  # type: ignore[arg-type]
         return cls()
