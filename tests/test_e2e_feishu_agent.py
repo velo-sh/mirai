@@ -143,7 +143,7 @@ class TestFeishuAgentE2E:
 
         # Simulate: user sends "hello" in Feishu group
         await receiver._process_and_reply(
-            text="hello",
+            message_content="hello",
             sender_id="ou_user_12345",
             message_id="om_original_msg_001",
             chat_id="oc_group_001",

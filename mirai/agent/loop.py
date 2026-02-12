@@ -249,10 +249,16 @@ class AgentLoop:
                     for tool_call in tool_calls:
                         log.info("tool_call", tool=tool_call.name, input=tool_call.input)
 
+                        await self._archive_trace(
+                            orjson.dumps(tool_call.model_dump()).decode(), "tool_use", {"tool": tool_call.name}
+                        )
+
                         if tool_call.name in self.tools:
                             result = await self.tools[tool_call.name].execute(**tool_call.input)
                         else:
                             result = f"Error: Tool {tool_call.name} not found."
+
+                        await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
 
                         messages.append(
                             {
