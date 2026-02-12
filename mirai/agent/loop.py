@@ -35,9 +35,9 @@ class AgentLoop:
     async def _initialize(self):
         """Asynchronously load collaborator metadata and soul."""
         from mirai.collaborator.manager import CollaboratorManager
-        from mirai.db.session import async_session
+        from mirai.db.session import get_session
 
-        async with async_session() as session:
+        async for session in get_session():
             manager = CollaboratorManager(session)
             collab = await manager.get_collaborator(self.collaborator_id)
             if collab:
@@ -68,7 +68,9 @@ class AgentLoop:
         )
         return trace_id
 
-    async def run(self, message: str, model: str = "claude-3-5-sonnet-20241022") -> str:
+    async def run(self, message: str, model: str | None = None) -> str:
+        # Use provider's configured model as default
+        model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
         # Archive incoming user message
         await self._archive_trace(message, "message", {"role": "user"})
 

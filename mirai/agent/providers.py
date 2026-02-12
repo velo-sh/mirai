@@ -7,11 +7,12 @@ import anthropic
 
 
 class AnthropicProvider:
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY must be set")
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
+        self.model = model
 
     async def generate_response(
         self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -52,7 +53,7 @@ class AntigravityProvider:
         "claude-3-haiku-20240307": "claude-sonnet-4-5",
     }
 
-    def __init__(self, credentials: dict[str, Any] | None = None):
+    def __init__(self, credentials: dict[str, Any] | None = None, model: str = "claude-sonnet-4-20250514"):
         import httpx
 
         from mirai.auth.antigravity_auth import load_credentials
@@ -63,6 +64,7 @@ class AntigravityProvider:
                 "No Antigravity credentials found. Run `python -m mirai.auth.auth_cli` to authenticate."
             )
         self.credentials: dict[str, Any] = loaded
+        self.model = model
         self._http = httpx.AsyncClient(timeout=120.0)
 
     async def _ensure_fresh_token(self) -> None:
@@ -320,13 +322,16 @@ class AntigravityProvider:
         raise Exception("Cloud Code Assist: max retries exceeded")
 
 
-def create_provider() -> AnthropicProvider | AntigravityProvider:
+def create_provider(model: str = "claude-sonnet-4-20250514") -> AnthropicProvider | AntigravityProvider:
     """
     Auto-detect and create the best available provider.
 
     Priority:
     1. Antigravity credentials (~/.mirai/antigravity_credentials.json)
     2. ANTHROPIC_API_KEY environment variable
+
+    Args:
+        model: Default model name to use for generation.
     """
     # Try Antigravity first
     from mirai.auth.antigravity_auth import load_credentials
@@ -334,8 +339,8 @@ def create_provider() -> AnthropicProvider | AntigravityProvider:
     creds = load_credentials()
     if creds:
         try:
-            provider = AntigravityProvider(credentials=creds)
-            print("Using Antigravity (Google Cloud Code Assist) provider.")
+            provider = AntigravityProvider(credentials=creds, model=model)
+            print(f"Using Antigravity (Google Cloud Code Assist) provider. Model: {model}")
             return provider
         except Exception as e:
             print(f"Antigravity provider failed: {e}. Falling back to direct API key.")
@@ -343,8 +348,8 @@ def create_provider() -> AnthropicProvider | AntigravityProvider:
     # Fall back to direct Anthropic API key
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if api_key:
-        print("Using direct Anthropic API key provider.")
-        return AnthropicProvider(api_key=api_key)
+        print(f"Using direct Anthropic API key provider. Model: {model}")
+        return AnthropicProvider(api_key=api_key, model=model)
 
     raise ValueError(
         "No API credentials available. Either:\n"

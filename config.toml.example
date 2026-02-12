@@ -1,0 +1,46 @@
+# =============================================================================
+# Mirai Configuration
+# Copy to ~/.mirai/config.toml and customize.
+#
+# Resolution priority: environment variable > this file > built-in defaults.
+# Environment variables use the MIRAI_ prefix (e.g., MIRAI_LLM_DEFAULT_MODEL).
+# Legacy FEISHU_* env vars are also supported for backward compatibility.
+# =============================================================================
+
+[llm]
+# Model to use for agent reasoning. Mapped automatically for Antigravity.
+# Available through Antigravity: claude-sonnet-4-20250514, gemini-2.0-flash, etc.
+default_model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+max_retries = 3
+
+[feishu]
+# Option A: App API (recommended — full features, auto-discovery)
+# Create a Feishu App at https://open.feishu.cn/app
+# Required permissions: im:message, im:message:send_as_bot, im:chat:readonly
+# app_id = "cli_xxxxxxxxxxxxxxxxxxxx"
+# app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Option B: Webhook (simpler — group notifications only)
+# webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
+
+# Set to false to disable Feishu integration entirely
+enabled = true
+
+[heartbeat]
+# Interval in seconds between proactive self-reflection pulses
+interval = 3600.0
+# Set to false to disable the heartbeat
+enabled = true
+
+[server]
+host = "0.0.0.0"
+port = 8000
+
+[database]
+sqlite_url = "sqlite+aiosqlite:///./mirai.db"
+duckdb_path = "mirai_hdd.duckdb"
+
+[agent]
+# Collaborator ULID — the identity this agent runs as
+collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
