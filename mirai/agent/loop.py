@@ -223,7 +223,14 @@ class AgentLoop:
                 final_text = "".join(c["text"] for c in assistant_content if c.get("type") == "text")
 
                 log.info("phase_critique", collaborator=self.collaborator_id)
-                critique_prompt = f"Critique your response: '{final_text}'. Does it align with your SOUL.md and recovered memories? If you need to refine it, provide the final version. If it's perfect, repeat it."
+                critique_prompt = (
+                    f"Review your draft response below and refine it if needed.\n\n"
+                    f'Draft: "{final_text}"\n\n'
+                    f"Rules:\n"
+                    f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
+                    f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
+                    f"- If the draft is already perfect, output it exactly as-is."
+                )
 
                 critique_messages = messages + [{"role": "user", "content": critique_prompt}]
                 with tracer.start_as_current_span("agent.critique"):
@@ -330,7 +337,14 @@ class AgentLoop:
 
                 # Phase 3: Critique
                 log.info("stream_phase_critique", collaborator=self.collaborator_id)
-                critique_prompt = f"Critique your response: '{final_text}'. Does it align with your SOUL.md and recovered memories? If you need to refine it, provide the final version. If it's perfect, repeat it."
+                critique_prompt = (
+                    f"Review your draft response below and refine it if needed.\n\n"
+                    f'Draft: "{final_text}"\n\n'
+                    f"Rules:\n"
+                    f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
+                    f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
+                    f"- If the draft is already perfect, output it exactly as-is."
+                )
                 critique_messages = messages + [{"role": "user", "content": critique_prompt}]
                 refined_response: ProviderResponse = await self.provider.generate_response(
                     model=model, system=full_system_prompt, messages=critique_messages, tools=[]
