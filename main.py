@@ -153,11 +153,36 @@ async def lifespan(app_instance: FastAPI):
             receiver.start(loop=asyncio.get_running_loop())
             log.info("feishu_receiver_started")
 
-        # Send check-in message to Feishu on startup
+        # Send check-in message to Feishu on startup (using a "panel" style card)
         if im_provider and agent:
-            checkin_ok = await im_provider.send_message(f"✅ **{agent.name}** is online and ready to collaborate!")
+            checkin_card = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "template": "blue",
+                    "title": {"content": f"🤖 {agent.name} is Online", "tag": "plain_text"},
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "content": f"**Status:** Ready to collaborate\n**Model:** `{config.llm.default_model}`\n**Version:** `v1.2.0`",
+                            "tag": "lark_md",
+                        },
+                    },
+                    {"tag": "hr"},
+                    {
+                        "tag": "note",
+                        "elements": [{"tag": "plain_text", "content": "Send me a message anytime to start!"}],
+                    },
+                ],
+            }
+            checkin_ok = await im_provider.send_card(
+                card_content=checkin_card,
+                chat_id=config.feishu.curator_chat_id,
+                prefer_p2p=False,
+            )
             if checkin_ok:
-                log.info("feishu_checkin_sent", agent=agent.name)
+                log.info("feishu_checkin_sent", agent=agent.name, style="card")
             else:
                 log.warning("feishu_checkin_failed")
 

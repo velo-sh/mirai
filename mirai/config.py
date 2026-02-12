@@ -38,6 +38,7 @@ class FeishuConfig(BaseModel):
     app_id: str | None = None
     app_secret: str | None = None
     webhook_url: str | None = None
+    curator_chat_id: str | None = None
     enabled: bool = True
 
 
@@ -100,6 +101,7 @@ class MiraiConfig(BaseSettings):
             "app_id": "FEISHU_APP_ID",
             "app_secret": "FEISHU_APP_SECRET",
             "webhook_url": "FEISHU_WEBHOOK_URL",
+            "curator_chat_id": "FEISHU_CURATOR_CHAT_ID",
         }
         for field_name, env_key in legacy_map.items():
             val = os.getenv(env_key)

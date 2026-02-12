@@ -5,6 +5,7 @@ Supports Anthropic direct API and Google Cloud Code Assist (Antigravity) routing
 Uses Pydantic models for validated responses and orjson for fast serialization.
 """
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -24,6 +25,54 @@ from mirai.logging import get_logger
 from mirai.tracing import get_tracer
 
 log = get_logger("mirai.providers")
+
+
+class QuotaManager:
+    """
+    Tracks and caches model quota usage for Google Antigravity.
+    Ensures we don't hit 429s by proactively failing over to available models.
+    """
+
+    CACHE_TTL = 60.0  # seconds
+
+    def __init__(self, credentials: dict[str, Any]):
+        self.credentials = credentials
+        self._quotas: dict[str, float] = {}  # model_id -> used_pct
+        self._last_update = 0.0
+        self._lock = asyncio.Lock()
+
+    async def get_used_pct(self, model_id: str) -> float:
+        """Get the current usage percentage for a model ID."""
+        await self._maybe_refresh()
+        return self._quotas.get(model_id, 0.0)
+
+    async def is_available(self, model_id: str) -> bool:
+        """Return True if model is not at 100% usage."""
+        return await self.get_used_pct(model_id) < 100.0
+
+    async def _maybe_refresh(self):
+        """Refresh quotas if cache expired."""
+        if time.time() - self._last_update < self.CACHE_TTL:
+            return
+
+        async with self._lock:
+            # Double check inside lock
+            if time.time() - self._last_update < self.CACHE_TTL:
+                return
+
+            from mirai.auth.antigravity_auth import fetch_usage
+
+            try:
+                log.debug("refreshing_quotas")
+                usage = await fetch_usage(self.credentials["access"], self.credentials.get("project_id", ""))
+                new_quotas = {}
+                for m in usage.get("models", []):
+                    new_quotas[m["id"]] = m["used_pct"]
+                self._quotas = new_quotas
+                self._last_update = time.time()
+                log.info("quotas_refreshed", models_count=len(self._quotas))
+            except Exception as e:
+                log.error("quota_refresh_failed", error=str(e))
 
 
 class _RetryableAPIError(Exception):
@@ -73,7 +122,9 @@ class AnthropicProvider:
                 content_blocks.append(
                     ToolUseBlock(id=block.id, name=block.name, input=block.input)  # type: ignore[arg-type]
                 )
-        return ProviderResponse(content=content_blocks, stop_reason=response.stop_reason or "end_turn")
+        return ProviderResponse(
+            content=content_blocks, stop_reason=response.stop_reason or "end_turn", model_id=response.model
+        )
 
 
 class AntigravityProvider:
@@ -146,6 +197,10 @@ class AntigravityProvider:
             self.credentials["expires"] = refreshed["expires"]
             save_credentials(self.credentials)
             log.info("token_refresh_complete")
+
+        # Also initialize/update QuotaManager
+        if not hasattr(self, "quota_manager"):
+            self.quota_manager = QuotaManager(self.credentials)
 
     def _build_headers(self) -> dict[str, str]:
         """Build request headers for Cloud Code Assist."""
@@ -274,7 +329,7 @@ class AntigravityProvider:
         }
 
     @staticmethod
-    def _parse_sse_response(raw_text: str) -> ProviderResponse:
+    def _parse_sse_response(raw_text: str, model_id: str | None = None) -> ProviderResponse:
         """
         Parse SSE stream response and build ProviderResponse.
         Uses orjson for fast JSON parsing of each SSE data line.
@@ -342,7 +397,7 @@ class AntigravityProvider:
         if not content_blocks:
             content_blocks.append(TextBlock())
 
-        return ProviderResponse(content=content_blocks, stop_reason=stop_reason)
+        return ProviderResponse(content=content_blocks, stop_reason=stop_reason, model_id=model_id)
 
     @retry(
         retry=retry_if_exception_type(_RetryableAPIError),
@@ -369,7 +424,40 @@ class AntigravityProvider:
 
             # Remap model name if needed for Cloud Code Assist
             effective_model = self.MODEL_MAP.get(model, model)
-            if effective_model != model:
+
+            # --- Smart Failover Logic ---
+            # Priority fallback chain if the requested model is exhausted
+            FALLBACK_CHAIN = [
+                # Primary
+                "claude-sonnet-4-5",
+                "claude-opus-4-5-thinking",
+                # Secondary
+                "gemini-3-pro-high",
+                "gemini-3-pro-low",
+                # Tertiary (Safety net)
+                "gemini-3-flash",
+                "gemini-2.0-flash",
+            ]
+
+            if effective_model in FALLBACK_CHAIN:
+                # Check if effective_model is available
+                if not await self.quota_manager.is_available(effective_model):
+                    log.warning("model_exhausted_failing_over", exhausted_model=effective_model)
+
+                    found_fallback = False
+                    for fallback in FALLBACK_CHAIN:
+                        if await self.quota_manager.is_available(fallback):
+                            log.info("failover_selected_model", selected=fallback)
+                            effective_model = fallback
+                            found_fallback = True
+                            break
+
+                    if not found_fallback:
+                        log.error("all_models_exhausted", chain=FALLBACK_CHAIN)
+                        # We still try the last one or stay with current to let API potentially return 429
+            # ----------------------------
+
+            if effective_model != model and effective_model not in self.MODEL_MAP.values():
                 log.info("model_remapped", original=model, effective=effective_model)
                 span.set_attribute("llm.effective_model", effective_model)
             elif model not in self.MODEL_MAP:
@@ -388,7 +476,7 @@ class AntigravityProvider:
             span.set_attribute("http.status_code", response.status_code)
 
             if response.status_code == 200:
-                return self._parse_sse_response(response.text)
+                return self._parse_sse_response(response.text, model_id=effective_model)
 
             error_text = response.text[:500]
             log.error("api_error", status=response.status_code, detail=error_text[:200])
@@ -659,4 +747,5 @@ class MockProvider:
         return ProviderResponse(
             content=[TextBlock(text=text)],
             stop_reason="end_turn",
+            model_id=self.model,
         )
