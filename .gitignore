@@ -63,6 +63,7 @@ db.sqlite3-journal
 mirai.db
 mirai_vectors/
 mirai_hdd.duckdb
+mirai_hdd.duckdb.wal
 
 # Flask stuff:
 instance/

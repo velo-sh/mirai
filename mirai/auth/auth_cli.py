@@ -1,0 +1,172 @@
+"""
+CLI tool for Antigravity (Cloud Code Assist) management.
+
+Usage:
+    python -m mirai.auth.auth_cli login    # OAuth login
+    python -m mirai.auth.auth_cli usage    # Show model quotas
+    python -m mirai.auth.auth_cli status   # Show account status
+"""
+
+import argparse
+import asyncio
+import sys
+from datetime import datetime, timezone
+
+from mirai.auth.antigravity_auth import (
+    login, load_credentials, fetch_usage, ensure_valid_credentials,
+)
+
+
+def _bar(pct: float, width: int = 20) -> str:
+    """Render a progress bar."""
+    filled = int(pct / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _reset_label(iso_ts: str | None) -> str:
+    """Format reset time as a human-readable relative label."""
+    if not iso_ts:
+        return ""
+    try:
+        reset = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = reset - now
+        total_min = int(delta.total_seconds() / 60)
+        if total_min <= 0:
+            return "  (resetting now)"
+        if total_min < 60:
+            return f"  (resets in {total_min}m)"
+        hours, mins = divmod(total_min, 60)
+        if hours < 24:
+            return f"  (resets in {hours}h{mins}m)"
+        return f"  (resets {reset.strftime('%m-%d %H:%M')} UTC)"
+    except Exception:
+        return ""
+
+
+async def cmd_login():
+    """Run the OAuth login flow."""
+    existing = load_credentials()
+    if existing:
+        print(f"Existing credentials found for: {existing.get('email', 'unknown')}")
+        answer = input("Re-authenticate? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Keeping existing credentials.")
+            return
+    try:
+        await login()
+    except KeyboardInterrupt:
+        print("\nLogin cancelled.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nLogin failed: {e}")
+        sys.exit(1)
+
+
+async def cmd_usage():
+    """Show per-model quota usage."""
+    try:
+        creds = await ensure_valid_credentials()
+    except FileNotFoundError as e:
+        print(str(e))
+        sys.exit(1)
+
+    print("Fetching usage data...\n")
+    usage = await fetch_usage(creds["access"], creds.get("project_id", ""))
+
+    # Header
+    plan = usage.get("plan") or "Unknown"
+    project = usage.get("project") or "Unknown"
+    email = creds.get("email") or "Unknown"
+    print(f"  Account:  {email}")
+    print(f"  Plan:     {plan}")
+    print(f"  Project:  {project}")
+
+    # Credits
+    monthly = usage.get("credits_monthly")
+    available = usage.get("credits_available")
+    if monthly and available is not None:
+        used_pct = ((monthly - available) / monthly) * 100
+        print(f"  Credits:  {available:.0f} / {monthly:.0f} ({used_pct:.0f}% used)")
+    print()
+
+    # Model quotas
+    models = usage.get("models", [])
+    if not models:
+        print("  No model quota data available.")
+        return
+
+    # Filter out internal models (chat_*, tab_*)
+    visible = [m for m in models if not m["id"].startswith(("chat_", "tab_"))]
+    if not visible:
+        print("  No user-facing model quotas found.")
+        return
+
+    # Sort: most used first, then alphabetical
+    visible.sort(key=lambda m: (-m["used_pct"], m["id"]))
+
+    print(f"  {'Model':<36s}  {'Quota':>22s}  Reset")
+    print(f"  {'─' * 36}  {'─' * 22}  {'─' * 18}")
+    for m in visible:
+        pct = m["used_pct"]
+        bar = _bar(pct)
+        reset = _reset_label(m.get("reset_time"))
+        status = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
+        print(f"  {status} {m['id']:<34s}  {bar} {pct:5.1f}%{reset}")
+
+    print()
+
+
+async def cmd_status():
+    """Show brief account status."""
+    creds = load_credentials()
+    if not creds:
+        print("Not authenticated. Run: python -m mirai.auth.auth_cli login")
+        sys.exit(1)
+
+    import time
+    email = creds.get("email", "unknown")
+    project = creds.get("project_id", "unknown")
+    expires = creds.get("expires", 0)
+    remaining = max(0, int(expires - time.time()))
+    hours, mins = divmod(remaining // 60, 60)
+
+    print(f"  Email:    {email}")
+    print(f"  Project:  {project}")
+    if remaining > 0:
+        print(f"  Token:    valid ({hours}h{mins}m remaining)")
+    else:
+        print(f"  Token:    expired (will auto-refresh)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="mirai.auth",
+        description="Antigravity (Cloud Code Assist) CLI",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("login", help="Authenticate with Google OAuth")
+    sub.add_parser("usage", help="Show per-model quota usage")
+    sub.add_parser("status", help="Show account status")
+
+    args = parser.parse_args()
+
+    if args.command == "login":
+        asyncio.run(cmd_login())
+    elif args.command == "usage":
+        asyncio.run(cmd_usage())
+    elif args.command == "status":
+        asyncio.run(cmd_status())
+    else:
+        # Default: show usage if credentials exist, else prompt login
+        creds = load_credentials()
+        if creds:
+            asyncio.run(cmd_usage())
+        else:
+            parser.print_help()
+            print("\nNo credentials found. Start with: python -m mirai.auth.auth_cli login")
+
+
+if __name__ == "__main__":
+    main()

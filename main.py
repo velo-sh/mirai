@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 load_dotenv()
 
-from mirai.agent.providers import AnthropicProvider
+from mirai.agent.providers import create_provider
 from mirai.agent.loop import AgentLoop
 from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.workspace import WorkspaceTool
@@ -31,7 +31,8 @@ async def lifespan(app_instance: FastAPI):
     
     # Initialize Agent components
     try:
-        provider = AnthropicProvider()
+        provider = create_provider()
+
         from mirai.agent.tools.shell import ShellTool
         from mirai.agent.tools.editor import EditorTool
         tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool()]
