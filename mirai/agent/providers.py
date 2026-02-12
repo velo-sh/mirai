@@ -1,12 +1,41 @@
+"""
+LLM Provider implementations for Mirai.
+
+Supports Anthropic direct API and Google Cloud Code Assist (Antigravity) routing.
+Uses Pydantic models for validated responses and orjson for fast serialization.
+"""
+
 import os
 import time
-from types import SimpleNamespace
 from typing import Any
 
 import anthropic
+import httpx
+import orjson
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.logging import get_logger
+
+log = get_logger("mirai.providers")
+
+
+class _RetryableAPIError(Exception):
+    """Raised on 429/503 to trigger tenacity retry."""
+
+    def __init__(self, status: int, detail: str):
+        self.status = status
+        super().__init__(f"API error {status}: {detail}")
 
 
 class AnthropicProvider:
+    """Direct Anthropic API provider."""
+
     def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
@@ -14,16 +43,36 @@ class AnthropicProvider:
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
         self.model = model
 
+    @retry(
+        retry=retry_if_exception_type(anthropic.RateLimitError),
+        wait=wait_exponential(min=1, max=30),
+        stop=stop_after_attempt(4),
+        before_sleep=lambda rs: log.warning(
+            "anthropic_rate_limited",
+            attempt=rs.attempt_number,
+            wait=rs.next_action.sleep,  # type: ignore[union-attr]
+        ),
+    )
     async def generate_response(
         self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Any:
-        return await self.client.messages.create(
+    ) -> ProviderResponse:
+        response = await self.client.messages.create(
             model=model,
             system=system,
             messages=messages,  # type: ignore[arg-type]
             tools=tools,  # type: ignore[arg-type]
             max_tokens=4096,
         )
+        # Convert Anthropic SDK response to our Pydantic model
+        content_blocks: list[TextBlock | ToolUseBlock] = []
+        for block in response.content:
+            if block.type == "text":
+                content_blocks.append(TextBlock(text=block.text))
+            elif block.type == "tool_use":
+                content_blocks.append(
+                    ToolUseBlock(id=block.id, name=block.name, input=block.input)  # type: ignore[arg-type]
+                )
+        return ProviderResponse(content=content_blocks, stop_reason=response.stop_reason or "end_turn")
 
 
 class AntigravityProvider:
@@ -32,7 +81,7 @@ class AntigravityProvider:
 
     Uses the v1internal:streamGenerateContent endpoint at cloudcode-pa.googleapis.com.
     Messages are sent in Google Generative AI format (contents/parts) and responses
-    are parsed back to Anthropic-compatible objects for AgentLoop compatibility.
+    are parsed back to Pydantic models for AgentLoop compatibility.
     """
 
     DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com"
@@ -64,8 +113,6 @@ class AntigravityProvider:
     }
 
     def __init__(self, credentials: dict[str, Any] | None = None, model: str = "claude-sonnet-4-20250514"):
-        import httpx
-
         from mirai.auth.antigravity_auth import load_credentials
 
         loaded = credentials or load_credentials()
@@ -75,37 +122,35 @@ class AntigravityProvider:
             )
         self.credentials: dict[str, Any] = loaded
         self.model = model
-        self._http = httpx.AsyncClient(timeout=120.0)
+        self._http = httpx.AsyncClient(timeout=120.0, http2=True)
 
     async def _ensure_fresh_token(self) -> None:
         """Refresh the access token if expired."""
         if time.time() >= self.credentials.get("expires", 0):
             from mirai.auth.antigravity_auth import refresh_access_token, save_credentials
 
-            print("[antigravity] Access token expired, refreshing...")
+            log.info("token_refresh_started")
             refreshed = await refresh_access_token(self.credentials["refresh"])
             self.credentials["access"] = refreshed["access"]
             self.credentials["expires"] = refreshed["expires"]
             save_credentials(self.credentials)
-            print("[antigravity] Token refreshed.")
+            log.info("token_refresh_complete")
 
     def _build_headers(self) -> dict[str, str]:
         """Build request headers for Cloud Code Assist."""
-        import json as _json
-
         return {
             "Authorization": f"Bearer {self.credentials['access']}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
             "User-Agent": f"antigravity/{self.ANTIGRAVITY_VERSION} darwin/arm64",
             "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-            "Client-Metadata": _json.dumps(
+            "Client-Metadata": orjson.dumps(
                 {
                     "ideType": "IDE_UNSPECIFIED",
                     "platform": "PLATFORM_UNSPECIFIED",
                     "pluginType": "GEMINI",
                 }
-            ),
+            ).decode(),
         }
 
     @staticmethod
@@ -161,7 +206,7 @@ class AntigravityProvider:
             return []
         declarations = []
         for tool in tools:
-            decl = {
+            decl: dict[str, Any] = {
                 "name": tool["name"],
                 "description": tool.get("description", ""),
             }
@@ -207,27 +252,27 @@ class AntigravityProvider:
         }
 
     @staticmethod
-    def _parse_sse_response(raw_text: str) -> SimpleNamespace:
+    def _parse_sse_response(raw_text: str) -> ProviderResponse:
         """
-        Parse SSE stream response and build Anthropic-compatible response object.
-        Returns a dict with 'content' list and 'stop_reason'.
+        Parse SSE stream response and build ProviderResponse.
+        Uses orjson for fast JSON parsing of each SSE data line.
         """
-        import json as _json
-        from types import SimpleNamespace
-
-        content_blocks: list[SimpleNamespace] = []
+        content_blocks: list[TextBlock | ToolUseBlock] = []
         stop_reason = "end_turn"
         tool_call_counter = 0
+
+        # Track last text block for merging consecutive text chunks
+        last_text_idx = -1
 
         for line in raw_text.split("\n"):
             if not line.startswith("data:"):
                 continue
-            json_str = line[5:].strip()
-            if not json_str:
+            json_bytes = line[5:].strip().encode()
+            if not json_bytes:
                 continue
             try:
-                chunk = _json.loads(json_str)
-            except _json.JSONDecodeError:
+                chunk = orjson.loads(json_bytes)
+            except orjson.JSONDecodeError:
                 continue
 
             response_data = chunk.get("response")
@@ -243,23 +288,27 @@ class AntigravityProvider:
                 for part in candidate["content"]["parts"]:
                     if "text" in part:
                         # Merge consecutive text blocks
-                        if content_blocks and content_blocks[-1].type == "text":
-                            content_blocks[-1].text += part["text"]
+                        if last_text_idx >= 0 and isinstance(content_blocks[last_text_idx], TextBlock):
+                            # TextBlock is frozen, create new merged block
+                            old = content_blocks[last_text_idx]
+                            assert isinstance(old, TextBlock)
+                            content_blocks[last_text_idx] = TextBlock(text=old.text + part["text"])
                         else:
-                            content_blocks.append(SimpleNamespace(type="text", text=part["text"]))
+                            content_blocks.append(TextBlock(text=part["text"]))
+                            last_text_idx = len(content_blocks) - 1
                     if "functionCall" in part:
                         fc = part["functionCall"]
                         tool_call_counter += 1
                         call_id = fc.get("id", f"{fc['name']}_{int(time.time())}_{tool_call_counter}")
                         content_blocks.append(
-                            SimpleNamespace(
-                                type="tool_use",
+                            ToolUseBlock(
                                 id=call_id,
                                 name=fc["name"],
                                 input=fc.get("args", {}),
                             )
                         )
                         stop_reason = "tool_use"
+                        last_text_idx = -1  # Reset text merge tracking
 
             if candidate and candidate.get("finishReason"):
                 fr = candidate["finishReason"]
@@ -269,69 +318,60 @@ class AntigravityProvider:
                     stop_reason = "max_tokens"
 
         if not content_blocks:
-            content_blocks.append(SimpleNamespace(type="text", text=""))
+            content_blocks.append(TextBlock())
 
-        return SimpleNamespace(content=content_blocks, stop_reason=stop_reason)
+        return ProviderResponse(content=content_blocks, stop_reason=stop_reason)
 
+    @retry(
+        retry=retry_if_exception_type(_RetryableAPIError),
+        wait=wait_exponential(min=2, max=30),
+        stop=stop_after_attempt(4),
+        before_sleep=lambda rs: log.warning(
+            "rate_limited",
+            attempt=rs.attempt_number,
+            wait=rs.next_action.sleep,  # type: ignore[union-attr]
+            status=getattr(rs.outcome.exception(), "status", None),  # type: ignore[union-attr]
+        ),
+    )
     async def generate_response(
         self,
         model: str,
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> SimpleNamespace:
-        import asyncio
-
+    ) -> ProviderResponse:
         await self._ensure_fresh_token()
 
         # Remap model name if needed for Cloud Code Assist
         effective_model = self.MODEL_MAP.get(model, model)
         if effective_model != model:
-            print(f"[antigravity] Model remapped: {model} -> {effective_model}")
+            log.info("model_remapped", original=model, effective=effective_model)
         elif model not in self.MODEL_MAP:
-            print(f"[antigravity] WARNING: Model '{model}' not in MODEL_MAP, sending as-is.")
+            log.warning("model_not_in_map", model=model)
 
         body = self._build_request(effective_model, system, messages, tools)
         headers = self._build_headers()
 
-        import json as _json
+        # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)
+        body_bytes = orjson.dumps(body)
 
-        body_json = _json.dumps(body)
+        url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
+        response = await self._http.post(url, content=body_bytes, headers=headers)
 
-        max_retries = 3
-        base_delay = 2.0
+        if response.status_code == 200:
+            return self._parse_sse_response(response.text)
 
-        for attempt in range(max_retries + 1):
-            url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
-            try:
-                response = await self._http.post(url, content=body_json, headers=headers)
-                if response.status_code == 200:
-                    return self._parse_sse_response(response.text)
+        error_text = response.text[:500]
+        log.error("api_error", status=response.status_code, detail=error_text[:200])
 
-                error_text = response.text[:500]
-                print(f"[antigravity] API error ({response.status_code}): {error_text}")
+        if response.status_code == 401:
+            self.credentials["expires"] = 0
+            raise RuntimeError("Cloud Code Assist: authentication expired")
 
-                if response.status_code == 401:
-                    self.credentials["expires"] = 0
-                    raise Exception("Cloud Code Assist: authentication expired")
+        if response.status_code in (429, 503):
+            raise _RetryableAPIError(response.status_code, error_text[:200])
 
-                if response.status_code == 429 and attempt < max_retries:
-                    delay = base_delay * (2**attempt)
-                    print(
-                        f"[antigravity] Rate limited. Retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})..."
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-
-                raise Exception(f"Cloud Code Assist API error ({response.status_code}): {error_text}")
-
-            except Exception as e:
-                if attempt < max_retries and "rate" in str(e).lower():
-                    delay = base_delay * (2**attempt)
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-        raise Exception("Cloud Code Assist: max retries exceeded")
+        raise RuntimeError(f"Cloud Code Assist API error ({response.status_code}): {error_text}")
 
 
 def create_provider(model: str = "claude-sonnet-4-20250514") -> AnthropicProvider | AntigravityProvider:
@@ -352,15 +392,15 @@ def create_provider(model: str = "claude-sonnet-4-20250514") -> AnthropicProvide
     if creds:
         try:
             provider = AntigravityProvider(credentials=creds, model=model)
-            print(f"Using Antigravity (Google Cloud Code Assist) provider. Model: {model}")
+            log.info("provider_initialized", provider="antigravity", model=model)
             return provider
         except Exception as e:
-            print(f"Antigravity provider failed: {e}. Falling back to direct API key.")
+            log.warning("antigravity_fallback", error=str(e))
 
     # Fall back to direct Anthropic API key
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if api_key:
-        print(f"Using direct Anthropic API key provider. Model: {model}")
+        log.info("provider_initialized", provider="anthropic", model=model)
         return AnthropicProvider(api_key=api_key, model=model)
 
     raise ValueError(
@@ -370,6 +410,11 @@ def create_provider(model: str = "claude-sonnet-4-20250514") -> AnthropicProvide
     )
 
 
+# ---------------------------------------------------------------------------
+# Mock providers for testing
+# ---------------------------------------------------------------------------
+
+
 class MockEmbeddingProvider:
     """Provides consistent fake embeddings for testing."""
 
@@ -377,46 +422,39 @@ class MockEmbeddingProvider:
         self.dim = dim
 
     async def get_embeddings(self, text: str) -> list[float]:
-        # Return a deterministic-looking mock vector based on text hash
+        """Return a deterministic fake vector based on text hash."""
         import hashlib
 
         h = hashlib.sha256(text.encode()).digest()
-        vector = []
-        for i in range(self.dim):
-            # Very simple fake vector generation
-            val = (h[i % 32] / 255.0) - 0.5
-            vector.append(val)
-        return vector
+        return [(h[i % 32] / 255.0) - 0.5 for i in range(self.dim)]
 
 
 class MockProvider:
     """Mock provider to test the AgentLoop logic without an API key."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.call_count = 0
+        self.model = "mock-model"
 
     async def generate_response(
         self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> SimpleNamespace:
+    ) -> ProviderResponse:
         self.call_count += 1
 
         if "Recovered Memories" in system:
-            print(f"[mock] SYSTEM PROMPT HAS MEMORIES:\n{system[system.find('### Recovered Memories') :]}")
+            log.debug("mock_memories_present", system_tail=system[system.find("### Recovered Memories") :])
 
         if "# IDENTITY" in system:
-            print("[mock] IDENTITY ANCHORS PRESENT (Sandwich Pattern)")
+            log.debug("mock_identity_anchors_present")
 
         last_message = messages[-1]
         last_content = last_message.get("content", "")
         if isinstance(last_content, list):
-            # Extract text if list (Anthropic format)
             last_text = "".join(
                 [c.get("text", "") for c in last_content if isinstance(c, dict) and c.get("type") == "text"]
             )
         else:
             last_text = str(last_content)
-
-        from types import SimpleNamespace
 
         # Extract text from all messages to find the user's original intent
         full_history_text = ""
@@ -430,16 +468,14 @@ class MockProvider:
                 full_history_text += str(content)
 
         last_text = str(last_text)
-        print(f"[mock] last_text: {last_text[:50]}...")
+        log.debug("mock_request", last_text=last_text[:50])
 
         # 1. Thinking Turn
         if "analyze the situation" in last_text or "perform a self-reflection" in last_text:
-            print("[mock] Handling Thinking Turn")
-            return SimpleNamespace(
+            return ProviderResponse(
                 content=[
-                    SimpleNamespace(
-                        type="text",
-                        text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>",
+                    TextBlock(
+                        text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>"
                     )
                 ],
                 stop_reason="end_turn",
@@ -447,36 +483,21 @@ class MockProvider:
 
         # 2. Critique Turn
         if "Critique your response" in last_text:
-            print("[mock] Handling Critique Turn")
-            return SimpleNamespace(
+            return ProviderResponse(
                 content=[
-                    SimpleNamespace(
-                        type="text",
-                        text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan.",
+                    TextBlock(
+                        text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan."
                     )
                 ],
                 stop_reason="end_turn",
             )
 
-        # 3. Tool Turn / Normal Chat
-        # If the last message is from the assistant and contains text, we might be reaching the end
-        # But in our mock, we want to trigger a tool at least once if tools are available.
-        # We'll use a local check to see if we already sent a tool in this specific history.
-
         # 3. Tool Turn / Sequential Logic
-        # We need to decide if we should call another tool or give a final answer.
-
-        # Check if the VERY LAST assistant message had a tool_use that hasn't been answered yet
-        # Actually, in AgentLoop, if stop_reason is tool_use, it executes and appends result.
-        # So when we are called again, the last message is a tool_result from user.
-
         messages[-1].get("role")
 
         if tools:
             # E2E Proactive Maintenance Workflow
             if "maintenance_check" in full_history_text.lower():
-                print("[mock] Match: E2E Maintenance Workflow")
-
                 shell_results = [
                     m
                     for m in messages
@@ -485,20 +506,13 @@ class MockProvider:
                 ]
 
                 if not shell_results:
-                    return SimpleNamespace(
+                    return ProviderResponse(
                         content=[
-                            SimpleNamespace(type="text", text="Checking for maintenance issues..."),
-                            SimpleNamespace(
-                                type="tool_use",
+                            TextBlock(text="Checking for maintenance issues..."),
+                            ToolUseBlock(
                                 id="call_shell_maint",
                                 name="shell_tool",
                                 input={"command": "ls maintenance_fixed.txt"},
-                                model_dump=lambda: {
-                                    "type": "tool_use",
-                                    "id": "call_shell_maint",
-                                    "name": "shell_tool",
-                                    "input": {"command": "ls maintenance_fixed.txt"},
-                                },
                             ),
                         ],
                         stop_reason="tool_use",
@@ -512,27 +526,16 @@ class MockProvider:
                 ]
 
                 if not editor_results:
-                    return SimpleNamespace(
+                    return ProviderResponse(
                         content=[
-                            SimpleNamespace(type="text", text="Fixing the issue..."),
-                            SimpleNamespace(
-                                type="tool_use",
+                            TextBlock(text="Fixing the issue..."),
+                            ToolUseBlock(
                                 id="call_edit_maint",
                                 name="editor_tool",
                                 input={
                                     "action": "write",
                                     "path": "maintenance_fixed.txt",
                                     "content": "HEALED: Sanity check passed.",
-                                },
-                                model_dump=lambda: {
-                                    "type": "tool_use",
-                                    "id": "call_edit_maint",
-                                    "name": "editor_tool",
-                                    "input": {
-                                        "action": "write",
-                                        "path": "maintenance_fixed.txt",
-                                        "content": "HEALED: Sanity check passed.",
-                                    },
                                 },
                             ),
                         ],
@@ -550,7 +553,7 @@ class MockProvider:
                     pass
 
         # Final Answer if no more tools needed
-        print("[mock] Handling final answer")
-        return SimpleNamespace(
-            content=[SimpleNamespace(type="text", text="I have finished the complex task.")], stop_reason="end_turn"
+        return ProviderResponse(
+            content=[TextBlock(text="I have finished the complex task.")],
+            stop_reason="end_turn",
         )

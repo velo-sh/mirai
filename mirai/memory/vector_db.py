@@ -35,7 +35,7 @@ class VectorStore:
             return
 
         dim = len(entries[0].vector)
-        import json
+        import orjson
 
         data = [
             {
@@ -43,7 +43,7 @@ class VectorStore:
                 "content": entry.content,
                 "collaborator_id": entry.collaborator_id,
                 "scope": entry.scope,
-                "metadata": json.dumps(entry.metadata),
+                "metadata": orjson.dumps(entry.metadata).decode(),
             }
             for entry in entries
         ]

@@ -1,13 +1,16 @@
-import asyncio
+"""Mirai Application Entry Point."""
+
 import os
+import time
 from contextlib import asynccontextmanager
 
-import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 load_dotenv()
+
+import asyncio  # noqa: E402
 
 from mirai.agent.heartbeat import HeartbeatManager  # noqa: E402
 from mirai.agent.loop import AgentLoop  # noqa: E402
@@ -16,6 +19,9 @@ from mirai.agent.tools.echo import EchoTool  # noqa: E402
 from mirai.agent.tools.workspace import WorkspaceTool  # noqa: E402
 from mirai.config import MiraiConfig  # noqa: E402
 from mirai.db.session import init_db  # noqa: E402
+from mirai.logging import get_logger, setup_logging  # noqa: E402
+
+log = get_logger("mirai.main")
 
 
 class ChatRequest(BaseModel):
@@ -33,7 +39,12 @@ async def lifespan(app_instance: FastAPI):
     global agent, heartbeat, config
     # Load configuration (TOML > env vars > defaults)
     config = MiraiConfig.load()
-    print(config)
+
+    # Setup structured logging (JSON in production, colored in dev)
+    json_output = os.getenv("MIRAI_LOG_FORMAT", "console") == "json"
+    setup_logging(json_output=json_output, level=config.server.log_level)
+
+    log.info("config_loaded", model=config.llm.default_model, host=config.server.host, port=config.server.port)
 
     # Initialize SQLite tables
     await init_db(config.database.sqlite_url)
@@ -51,7 +62,7 @@ async def lifespan(app_instance: FastAPI):
             tools=tools,
             collaborator_id=config.agent.collaborator_id,
         )
-        print(f"AgentLoop initialized for: {agent.name}")
+        log.info("agent_initialized", collaborator=agent.name)
 
         # Start Heartbeat with Optional IM Integration
         im_provider = None
@@ -59,12 +70,12 @@ async def lifespan(app_instance: FastAPI):
             from mirai.agent.im.feishu import FeishuProvider
 
             im_provider = FeishuProvider(app_id=config.feishu.app_id, app_secret=config.feishu.app_secret)
-            print("Feishu IM notification enabled via App API (chat auto-discovery).")
+            log.info("feishu_enabled", mode="app_api")
         elif config.feishu.enabled and config.feishu.webhook_url:
             from mirai.agent.im.feishu import FeishuProvider
 
             im_provider = FeishuProvider(webhook_url=config.feishu.webhook_url)
-            print("Feishu IM notification enabled via Webhook.")
+            log.info("feishu_enabled", mode="webhook")
 
         if config.heartbeat.enabled:
             heartbeat = HeartbeatManager(
@@ -90,10 +101,10 @@ async def lifespan(app_instance: FastAPI):
                 message_handler=handle_feishu_message,
             )
             receiver.start(loop=asyncio.get_running_loop())
-            print("Feishu WebSocket receiver started. You can now chat with Mira!")
+            log.info("feishu_receiver_started")
 
     except Exception as e:
-        print(f"Warning: Failed to initialize AgentLoop: {e}")
+        log.error("agent_init_failed", error=str(e))
         agent = None
 
     yield
@@ -102,6 +113,25 @@ async def lifespan(app_instance: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Structlog request logging middleware
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def structlog_access_log(request: Request, call_next) -> Response:  # type: ignore[type-arg]
+    """Log every HTTP request with method, path, status, and duration."""
+    start = time.perf_counter()
+    response: Response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1_000
+    log.info(
+        "http_request",
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        duration_ms=round(duration_ms, 1),
+    )
+    return response
 
 
 @app.get("/health")
@@ -124,9 +154,21 @@ async def chat(request: ChatRequest):
 
 
 def main():
+    """Start the Mirai server using Granian (Rust ASGI server)."""
+    from granian import Granian
+    from granian.constants import Interfaces
+
     cfg = config or MiraiConfig.load()
-    print(f"Starting Mirai Node (FastAPI) at http://{cfg.server.host}:{cfg.server.port}")
-    uvicorn.run(app, host=cfg.server.host, port=cfg.server.port)
+    log.info("server_starting", host=cfg.server.host, port=cfg.server.port, server="granian")
+
+    server = Granian(
+        "main:app",
+        address=cfg.server.host,
+        port=cfg.server.port,
+        interface=Interfaces.ASGI,
+        workers=1,
+    )
+    server.serve()
 
 
 if __name__ == "__main__":
