@@ -143,6 +143,14 @@ async def lifespan(app_instance: FastAPI):
             receiver.start(loop=asyncio.get_running_loop())
             log.info("feishu_receiver_started")
 
+        # Send check-in message to Feishu on startup
+        if im_provider and agent:
+            checkin_ok = await im_provider.send_message(f"✅ **{agent.name}** is online and ready to collaborate!")
+            if checkin_ok:
+                log.info("feishu_checkin_sent", agent=agent.name)
+            else:
+                log.warning("feishu_checkin_failed")
+
     except Exception as e:
         log.error("agent_init_failed", error=str(e))
         agent = None

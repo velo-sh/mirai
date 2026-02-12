@@ -1,60 +1,64 @@
-"""End-to-end test: Agent ↔ Feishu lifecycle.
+"""End-to-end test: Agent ↔ Feishu full lifecycle.
 
-Scenario:
-  1. Agent comes online → sends a check-in message to Feishu
-  2. Feishu user sends "hello" → Agent immediately replies with "Thinking..."
-  3. Agent processes via LLM (MockProvider) → patches the placeholder with real response
+Reproduces the exact flow verified in live testing (2026-02-12):
 
-All Feishu SDK calls are mocked; the AgentLoop + MockProvider pipeline is real.
+  Step 1 — Agent online check-in:
+      Agent starts up → FeishuProvider.send_message("Mira is online …")
+      → Feishu group receives the check-in message.
+
+  Step 2 — User sends "hello", agent replies "Thinking…":
+      FeishuEventReceiver._process_and_reply is called →
+      immediately sends a reply with "🤔 Thinking..." (typing indicator).
+
+  Step 3 — LLM processes and sends real reply:
+      AgentLoop.run() executes Think → Act → Critique pipeline →
+      a NEW reply message is sent with the real LLM response.
+
+All Feishu SDK HTTP calls are mocked; the AgentLoop pipeline is real
+(backed by MockProvider).
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock, patch
 
+import duckdb
+import orjson
 import pytest
 
+from mirai.agent.im.base import BaseIMProvider
+from mirai.agent.im.feishu_receiver import FeishuEventReceiver
 from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _create_real_agent() -> AgentLoop:
-    """Create a real AgentLoop backed by MockProvider (no DB)."""
-    provider = MockProvider()
-    tools = [EchoTool()]
-    agent = AgentLoop(provider, tools, collaborator_id="e2e-feishu-test")
-    agent.name = "E2EFeishuBot"
+def _init_memory(self, db_path=":memory:"):
+    """Replacement __init__ for DuckDBStorage that uses in-memory DB."""
+    self.db_path = ":memory:"
+    self.conn = duckdb.connect(":memory:")
+    self._init_schema()
+
+
+def _create_agent() -> AgentLoop:
+    """Real AgentLoop with MockProvider (no network, in-memory DB)."""
+    with patch("mirai.agent.loop.DuckDBStorage.__init__", _init_memory):
+        agent = AgentLoop(
+            provider=MockProvider(),
+            tools=[EchoTool()],
+            collaborator_id="e2e-feishu-test",
+        )
+    agent.name = "Mira"
     agent.role = "collaborator"
-    agent.base_system_prompt = "You are a test agent."
+    agent.base_system_prompt = "You are Mira, a helpful collaborator."
     agent.soul_content = ""
     return agent
 
 
-def _build_mock_feishu_provider():
-    """Build a mock FeishuProvider that records all send_message calls."""
-    from mirai.agent.im.base import BaseIMProvider
+class FakeFeishuReplyResponse:
+    """Simulates a successful Feishu reply API response."""
 
-    class RecordingFeishuProvider(BaseIMProvider):
-        def __init__(self):
-            self.messages: list[dict] = []
-
-        async def send_message(self, content: str, chat_id: str | None = None) -> bool:
-            self.messages.append({"content": content, "chat_id": chat_id})
-            return True
-
-        async def send_card(self, card_content: dict, chat_id: str | None = None) -> bool:
-            return True
-
-    return RecordingFeishuProvider()
-
-
-class MockReplyResponse:
-    """Mocks the Feishu SDK reply response."""
-
-    def __init__(self, message_id: str = "mock_placeholder_msg_id"):
+    def __init__(self, message_id: str = "om_placeholder_123"):
         self.data = MagicMock()
         self.data.message_id = message_id
 
@@ -62,319 +66,181 @@ class MockReplyResponse:
         return True
 
 
-class MockPatchResponse:
-    """Mocks the Feishu SDK patch response."""
-
-    def success(self):
-        return True
+# ── The E2E Test ─────────────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# Step 1: Agent online → check-in to Feishu
-# ---------------------------------------------------------------------------
-
-
-class TestAgentOnlineCheckIn:
-    @pytest.mark.asyncio
-    async def test_sends_checkin_on_startup(self):
-        """When agent comes online, it sends a check-in message via IM provider."""
-        agent = _create_real_agent()
-        im_provider = _build_mock_feishu_provider()
-
-        # Simulate the startup check-in
-        await im_provider.send_message(
-            f"✅ **{agent.name}** is online and ready to collaborate!",
-            chat_id="test_chat_001",
-        )
-
-        assert len(im_provider.messages) == 1
-        msg = im_provider.messages[0]
-        assert agent.name in msg["content"]
-        assert "online" in msg["content"]
-        assert msg["chat_id"] == "test_chat_001"
+class TestFeishuAgentE2E:
+    """Full Agent ↔ Feishu lifecycle, tested as one sequential scenario."""
 
     @pytest.mark.asyncio
-    async def test_checkin_with_webhook_fallback(self):
-        """Check-in also works via webhook when no app_id is configured."""
-        im_provider = _build_mock_feishu_provider()
-
-        await im_provider.send_message("🤖 Agent online (webhook mode)")
-        assert len(im_provider.messages) == 1
-        assert "online" in im_provider.messages[0]["content"]
-
-
-# ---------------------------------------------------------------------------
-# Step 2 + 3: Receive message → Typing → LLM response → Patch
-# ---------------------------------------------------------------------------
-
-
-class TestFeishuMessageFlow:
-    @pytest.mark.asyncio
-    async def test_typing_then_llm_reply(self):
-        """Full flow: receive hello → typing indicator → LLM reply → patch.
-
-        Mocks the Feishu SDK reply/patch APIs while using a real AgentLoop.
+    async def test_full_lifecycle(self):
         """
-        agent = _create_real_agent()
+        Step 1: Agent comes online → sends check-in to Feishu group
+        Step 2: User sends "hello" → agent immediately replies "Thinking…"
+        Step 3: LLM processes → agent sends real reply
+        """
+        agent = _create_agent()
 
-        # Track the flow stages
-        flow_record: list[str] = []
-        reply_content_record: list[str] = []
-        patch_content_record: list[str] = []
+        # ── Step 1: Agent online → check-in message ──────────────────
 
-        # --- Mock Feishu reply client ---
+        class RecordingIMProvider(BaseIMProvider):
+            """Records all messages sent through the IM provider."""
+
+            def __init__(self):
+                self.sent: list[str] = []
+
+            async def send_message(self, content: str, chat_id=None) -> bool:
+                self.sent.append(content)
+                return True
+
+            async def send_card(self, card_content: dict, chat_id=None) -> bool:
+                return True
+
+        im_provider = RecordingIMProvider()
+
+        # This is what main.py lifespan does after agent init:
+        checkin_ok = await im_provider.send_message(f"✅ **{agent.name}** is online and ready to collaborate!")
+
+        assert checkin_ok is True
+        assert len(im_provider.sent) == 1
+        assert "Mira" in im_provider.sent[0]
+        assert "online" in im_provider.sent[0]
+
+        # ── Step 2 + 3: Receive "hello" → Typing → LLM → Reply ──────
+
+        # We'll record every Feishu API call in order
+        feishu_calls: list[dict] = []
+
         mock_reply_client = MagicMock()
 
-        # Mock areply (typing indicator)
         async def mock_areply(request):
-            import orjson
-
+            """Captures reply API calls (both typing and real response)."""
             body = request.request_body
             content = orjson.loads(body.content)
-            reply_content_record.append(content.get("text", ""))
-            flow_record.append("typing_sent")
-            return MockReplyResponse("placeholder_msg_123")
+            text = content.get("text", "")
+            feishu_calls.append(
+                {
+                    "action": "reply",
+                    "message_id": request.message_id,
+                    "text": text,
+                }
+            )
+            return FakeFeishuReplyResponse(f"om_reply_{len(feishu_calls)}")
 
         mock_reply_client.im.v1.message.areply = mock_areply
 
-        # Mock apatch (real response)
-        async def mock_apatch(request):
-            import orjson
-
-            body = request.request_body
-            content = orjson.loads(body.content)
-            patch_content_record.append(content.get("text", ""))
-            flow_record.append("response_patched")
-            return MockPatchResponse()
-
-        mock_reply_client.im.v1.message.apatch = mock_apatch
-
-        # --- Build the receiver ---
-        async def message_handler(sender_id: str, text: str, chat_id: str) -> str:
-            flow_record.append("llm_processing")
-            result = await agent.run(text)
-            flow_record.append("llm_done")
-            return result
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
+        # Build receiver with real AgentLoop as handler
+        async def handle_message(sender_id: str, text: str, chat_id: str) -> str:
+            return await agent.run(text)
 
         receiver = FeishuEventReceiver(
             app_id="test_app_id",
             app_secret="test_app_secret",
-            message_handler=message_handler,
+            message_handler=handle_message,
         )
         receiver._reply_client = mock_reply_client
 
-        # --- Execute the flow ---
+        # Simulate: user sends "hello" in Feishu group
         await receiver._process_and_reply(
             text="hello",
-            sender_id="user_001",
-            message_id="msg_original_001",
-            chat_id="chat_001",
+            sender_id="ou_user_12345",
+            message_id="om_original_msg_001",
+            chat_id="oc_group_001",
         )
 
-        # --- Verify the flow order ---
-        assert flow_record == [
-            "typing_sent",
-            "llm_processing",
-            "llm_done",
-            "response_patched",
-        ], f"Unexpected flow: {flow_record}"
+        # ── Verify the complete flow ─────────────────────────────────
 
-        # Verify typing indicator content
-        assert len(reply_content_record) == 1
-        assert "Thinking" in reply_content_record[0]
+        # Exactly 2 Feishu API calls should have been made:
+        #   Call 1: typing indicator ("🤔 Thinking...")
+        #   Call 2: real LLM response
+        assert len(feishu_calls) == 2, (
+            f"Expected 2 Feishu API calls (typing + reply), got {len(feishu_calls)}: {feishu_calls}"
+        )
 
-        # Verify LLM response was patched (not empty)
-        assert len(patch_content_record) == 1
-        assert len(patch_content_record[0]) > 0
+        # Call 1: typing indicator
+        typing_call = feishu_calls[0]
+        assert typing_call["action"] == "reply"
+        assert typing_call["message_id"] == "om_original_msg_001"
+        assert "Thinking" in typing_call["text"], f"First reply should be typing indicator, got: {typing_call['text']}"
+
+        # Call 2: real LLM response (not empty, not "Thinking...")
+        reply_call = feishu_calls[1]
+        assert reply_call["action"] == "reply"
+        assert reply_call["message_id"] == "om_original_msg_001"
+        assert len(reply_call["text"]) > 0, "LLM response should not be empty"
+        assert "Thinking" not in reply_call["text"], (
+            f"Second reply should be real LLM response, not typing: {reply_call['text']}"
+        )
 
     @pytest.mark.asyncio
-    async def test_typing_sent_immediately_before_llm(self):
-        """Typing indicator is sent BEFORE the LLM starts processing."""
-        timing_record: list[tuple[str, float]] = []
-
-        agent = _create_real_agent()
-
-        mock_reply_client = MagicMock()
-
+    async def test_typing_arrives_before_llm_starts(self):
+        """The typing indicator must be sent BEFORE the LLM begins processing."""
         import time
 
-        async def mock_areply(request):
-            timing_record.append(("typing", time.monotonic()))
-            return MockReplyResponse("ph_001")
+        agent = _create_agent()
+        timestamps: list[tuple[str, float]] = []
 
-        async def mock_apatch(request):
-            timing_record.append(("patch", time.monotonic()))
-            return MockPatchResponse()
-
-        mock_reply_client.im.v1.message.areply = mock_areply
-        mock_reply_client.im.v1.message.apatch = mock_apatch
-
-        async def handler(sender_id: str, text: str, chat_id: str) -> str:
-            timing_record.append(("llm_start", time.monotonic()))
-            result = await agent.run(text)
-            timing_record.append(("llm_end", time.monotonic()))
-            return result
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
-
-        receiver = FeishuEventReceiver(
-            app_id="test_id",
-            app_secret="test_secret",
-            message_handler=handler,
-        )
-        receiver._reply_client = mock_reply_client
-
-        await receiver._process_and_reply("hello", "u1", "m1", "c1")
-
-        # Verify: typing < LLM start < LLM end < patch
-        labels = [r[0] for r in timing_record]
-        assert labels == ["typing", "llm_start", "llm_end", "patch"]
-
-        # Timing: typing must be before LLM
-        assert timing_record[0][1] < timing_record[1][1]
-
-    @pytest.mark.asyncio
-    async def test_fallback_reply_if_typing_fails(self):
-        """If the typing placeholder fails, agent still sends a direct reply."""
-        agent = _create_real_agent()
-
-        mock_reply_client = MagicMock()
-        reply_calls: list[str] = []
+        mock_client = MagicMock()
 
         async def mock_areply(request):
-            import orjson
-
             body = request.request_body
             content = orjson.loads(body.content)
             text = content.get("text", "")
-            reply_calls.append(text)
+            label = "typing" if "Thinking" in text else "llm_reply"
+            timestamps.append((label, time.monotonic()))
+            return FakeFeishuReplyResponse()
 
-            if "Thinking" in text:
-                # Simulate typing placeholder failure
-                resp = MagicMock()
-                resp.success.return_value = False
-                resp.code = 403
-                resp.msg = "Forbidden"
-                return resp
-            else:
-                # Fallback reply succeeds
-                return MockReplyResponse("fallback_msg")
+        mock_client.im.v1.message.areply = mock_areply
 
-        mock_reply_client.im.v1.message.areply = mock_areply
-        mock_reply_client.im.v1.message.apatch = AsyncMock()
-
-        async def handler(sender_id: str, text: str, chat_id: str) -> str:
-            return await agent.run(text)
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
+        async def handler(sender_id, text, chat_id):
+            timestamps.append(("llm_start", time.monotonic()))
+            result = await agent.run(text)
+            timestamps.append(("llm_end", time.monotonic()))
+            return result
 
         receiver = FeishuEventReceiver(
-            app_id="test_id",
-            app_secret="test_secret",
+            app_id="id",
+            app_secret="secret",
             message_handler=handler,
         )
-        receiver._reply_client = mock_reply_client
+        receiver._reply_client = mock_client
 
         await receiver._process_and_reply("hello", "u1", "m1", "c1")
 
-        # Should have 2 reply calls: failed typing + fallback with real response
-        assert len(reply_calls) == 2
-        assert "Thinking" in reply_calls[0]
-        # Second call is the actual LLM response (not empty)
-        assert len(reply_calls[1]) > 0
-        assert "Thinking" not in reply_calls[1]
-
-    @pytest.mark.asyncio
-    async def test_handler_error_does_not_crash(self):
-        """If the LLM handler raises, the receiver should not crash."""
-        mock_reply_client = MagicMock()
-
-        async def mock_areply(request):
-            return MockReplyResponse("ph_001")
-
-        async def mock_apatch(request):
-            return MockPatchResponse()
-
-        mock_reply_client.im.v1.message.areply = mock_areply
-        mock_reply_client.im.v1.message.apatch = mock_apatch
-
-        async def handler(sender_id: str, text: str, chat_id: str) -> str:
-            raise RuntimeError("LLM exploded")
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
-
-        receiver = FeishuEventReceiver(
-            app_id="test_id",
-            app_secret="test_secret",
-            message_handler=handler,
+        labels = [t[0] for t in timestamps]
+        assert labels == ["typing", "llm_start", "llm_end", "llm_reply"], (
+            f"Expected [typing → llm_start → llm_end → llm_reply], got {labels}"
         )
-        receiver._reply_client = mock_reply_client
+        # typing must happen strictly before LLM starts
+        assert timestamps[0][1] < timestamps[1][1]
 
-        # Should NOT raise
-        await receiver._process_and_reply("hello", "u1", "m1", "c1")
-
-
-# ---------------------------------------------------------------------------
-# Full lifecycle: check-in → receive → typing → reply
-# ---------------------------------------------------------------------------
-
-
-class TestFullLifecycle:
     @pytest.mark.asyncio
-    async def test_complete_agent_feishu_lifecycle(self):
-        """End-to-end: agent online → check-in → receive hello → typing → LLM reply."""
-        # --- Phase 1: Agent online + check-in ---
-        agent = _create_real_agent()
-        im_provider = _build_mock_feishu_provider()
-
-        checkin_msg = f"✅ **{agent.name}** is online and ready!"
-        await im_provider.send_message(checkin_msg, chat_id="group_001")
-
-        assert len(im_provider.messages) == 1
-        assert agent.name in im_provider.messages[0]["content"]
-
-        # --- Phase 2+3: Receive message → Typing → LLM → Patch ---
-        flow_stages: list[str] = []
-
-        mock_reply_client = MagicMock()
+    async def test_llm_error_does_not_crash_receiver(self):
+        """If the LLM explodes, the receiver logs the error but does not crash."""
+        mock_client = MagicMock()
+        replies: list[str] = []
 
         async def mock_areply(request):
-            flow_stages.append("typing")
-            return MockReplyResponse("ph_lifecycle")
-
-        async def mock_apatch(request):
-            import orjson
-
             body = request.request_body
             content = orjson.loads(body.content)
-            flow_stages.append(f"patched:{content.get('text', '')[:30]}")
-            return MockPatchResponse()
+            replies.append(content.get("text", ""))
+            return FakeFeishuReplyResponse()
 
-        mock_reply_client.im.v1.message.areply = mock_areply
-        mock_reply_client.im.v1.message.apatch = mock_apatch
+        mock_client.im.v1.message.areply = mock_areply
 
-        async def message_handler(sender_id: str, text: str, chat_id: str) -> str:
-            flow_stages.append("llm")
-            return await agent.run(text)
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
+        async def exploding_handler(sender_id, text, chat_id):
+            raise RuntimeError("LLM service unavailable")
 
         receiver = FeishuEventReceiver(
-            app_id="test_app",
-            app_secret="test_secret",
-            message_handler=message_handler,
+            app_id="id",
+            app_secret="secret",
+            message_handler=exploding_handler,
         )
-        receiver._reply_client = mock_reply_client
+        receiver._reply_client = mock_client
 
-        await receiver._process_and_reply("hello", "user_feishu", "orig_msg", "group_001")
+        # Should NOT raise — the receiver catches exceptions internally
+        await receiver._process_and_reply("hello", "u1", "m1", "c1")
 
-        # Verify complete flow
-        assert flow_stages[0] == "typing"
-        assert flow_stages[1] == "llm"
-        assert flow_stages[2].startswith("patched:")
-
-        # Verify the patched response is not empty
-        patched_text = flow_stages[2].split("patched:", 1)[1]
-        assert len(patched_text) > 0
+        # Typing indicator should still have been sent
+        assert len(replies) >= 1
+        assert "Thinking" in replies[0]

@@ -12,8 +12,6 @@ import lark_oapi as lark
 import orjson
 from lark_oapi.api.im.v1 import (
     P2ImMessageReceiveV1,
-    PatchMessageRequest,
-    PatchMessageRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
@@ -140,8 +138,6 @@ class FeishuEventReceiver:
         2. Process the message through AgentLoop
         3. Patch the placeholder with the real response
         """
-        placeholder_msg_id = None
-
         try:
             # Step 1: Send "Thinking..." placeholder immediately
             placeholder_request = (
@@ -157,7 +153,6 @@ class FeishuEventReceiver:
             )
             placeholder_resp = await self._reply_client.im.v1.message.areply(placeholder_request)  # type: ignore[union-attr]
             if placeholder_resp.success():
-                placeholder_msg_id = placeholder_resp.data.message_id
                 log.info("feishu_typing_sent", msg_id=message_id)
             else:
                 log.error("feishu_typing_failed", code=placeholder_resp.code, msg=placeholder_resp.msg)
@@ -168,35 +163,26 @@ class FeishuEventReceiver:
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
 
-            # Step 3: Patch the placeholder with the real response
-            if placeholder_msg_id:
-                patch_request = (
-                    PatchMessageRequest.builder()
-                    .message_id(placeholder_msg_id)
-                    .request_body(
-                        PatchMessageRequestBody.builder().content(orjson.dumps({"text": reply_text}).decode()).build()
-                    )
+            # Step 3: Send the real response as a new reply
+            #
+            # Note: Feishu PATCH API only works for card messages, not text.
+            # So we send the real response as a separate reply to the original message.
+            reply_request = (
+                ReplyMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    ReplyMessageRequestBody.builder()
+                    .msg_type("text")
+                    .content(orjson.dumps({"text": reply_text}).decode())
                     .build()
                 )
-                patch_resp = await self._reply_client.im.v1.message.apatch(patch_request)  # type: ignore[union-attr]
-                if not patch_resp.success():
-                    log.error("feishu_patch_failed", code=patch_resp.code, msg=patch_resp.msg)
-                else:
-                    log.info("feishu_reply_patched", msg_id=message_id)
+                .build()
+            )
+            reply_resp = await self._reply_client.im.v1.message.areply(reply_request)  # type: ignore[union-attr]
+            if reply_resp.success():
+                log.info("feishu_reply_sent", msg_id=message_id)
             else:
-                # Fallback: send a new reply if placeholder failed
-                fallback_request = (
-                    ReplyMessageRequest.builder()
-                    .message_id(message_id)
-                    .request_body(
-                        ReplyMessageRequestBody.builder()
-                        .msg_type("text")
-                        .content(orjson.dumps({"text": reply_text}).decode())
-                        .build()
-                    )
-                    .build()
-                )
-                await self._reply_client.im.v1.message.areply(fallback_request)  # type: ignore[union-attr]
+                log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
 
         except Exception as e:
             log.error("feishu_reply_error", error=str(e), exc_info=True)
