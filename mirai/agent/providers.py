@@ -450,11 +450,11 @@ class MockEmbeddingProvider:
         self.dim = dim
 
     async def get_embeddings(self, text: str) -> list[float]:
-        """Return a deterministic fake vector based on text hash."""
-        import hashlib
-
-        h = hashlib.sha256(text.encode()).digest()
-        return [(h[i % 32] / 255.0) - 0.5 for i in range(self.dim)]
+        """Return a deterministic fake vector for testing."""
+        # Return a unit vector to ensure all searches are based on metadata filters in tests
+        vec = [0.0] * self.dim
+        vec[0] = 1.0
+        return vec
 
 
 class MockProvider:
@@ -495,17 +495,14 @@ class MockProvider:
             else:
                 full_history_text += str(content)
 
-        last_text = str(last_text)
-        log.debug("mock_request", last_text=last_text[:50])
-
         # 1. Thinking Turn
         if "analyze the situation" in last_text or "perform a self-reflection" in last_text:
+            text = "<thinking>I am analyzing the current request.</thinking>"
+            if "maintenance_check" in last_text:
+                text = "<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>"
+
             return ProviderResponse(
-                content=[
-                    TextBlock(
-                        text="<thinking>The system heartbeat has triggered. I should scan the project and summarize progress.</thinking>"
-                    )
-                ],
+                content=[TextBlock(text=text)],
                 stop_reason="end_turn",
             )
 
@@ -514,26 +511,70 @@ class MockProvider:
             return ProviderResponse(
                 content=[
                     TextBlock(
-                        text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan."
+                        text="The response is aligned with my SOUL.md. Final version: I have successfully completed the proactive scan and verified alignment with SOUL.md."
                     )
                 ],
                 stop_reason="end_turn",
             )
 
         # 3. Tool Turn / Sequential Logic
-        messages[-1].get("role")
-
         if tools:
-            # E2E Proactive Maintenance Workflow
-            if "maintenance_check" in full_history_text.lower():
+            # 1. Executive Multi-Step Workflow (soul_summary)
+            if "soul_summary" in full_history_text.lower() or "find the soul file" in full_history_text.lower():
                 shell_results = [
+                    m
+                    for m in messages
+                    if m.get("role") == "user"
+                    and any("tool_result" in str(c) and "find_soul_call" in str(c) for c in (m.get("content") or []))
+                ]
+                if not shell_results:
+                    return ProviderResponse(
+                        content=[
+                            TextBlock(text="Finding the SOUL file..."),
+                            ToolUseBlock(
+                                id="find_soul_call",
+                                name="shell_tool",
+                                input={"command": 'find . -name "*SOUL.md"'},
+                            ),
+                        ],
+                        stop_reason="tool_use",
+                    )
+
+                editor_results = [
+                    m
+                    for m in messages
+                    if m.get("role") == "user"
+                    and any(
+                        "tool_result" in str(c) and "write_summary_call" in str(c) for c in (m.get("content") or [])
+                    )
+                ]
+                if not editor_results:
+                    return ProviderResponse(
+                        content=[
+                            TextBlock(text="Writing the summary..."),
+                            ToolUseBlock(
+                                id="write_summary_call",
+                                name="editor_tool",
+                                input={
+                                    "action": "write",
+                                    "path": "soul_summary.txt",
+                                    "content": "SOUL Summary: This is a verified identity summary.",
+                                },
+                            ),
+                        ],
+                        stop_reason="tool_use",
+                    )
+
+            # 2. E2E Proactive Maintenance Workflow
+            if "maintenance_check" in full_history_text.lower():
+                maint_shell_results = [
                     m
                     for m in messages
                     if m.get("role") == "user"
                     and any("tool_result" in str(c) and "call_shell_maint" in str(c) for c in (m.get("content") or []))
                 ]
 
-                if not shell_results:
+                if not maint_shell_results:
                     return ProviderResponse(
                         content=[
                             TextBlock(text="Checking for maintenance issues..."),
@@ -546,14 +587,14 @@ class MockProvider:
                         stop_reason="tool_use",
                     )
 
-                editor_results = [
+                maint_editor_results = [
                     m
                     for m in messages
                     if m.get("role") == "user"
                     and any("tool_result" in str(c) and "call_edit_maint" in str(c) for c in (m.get("content") or []))
                 ]
 
-                if not editor_results:
+                if not maint_editor_results:
                     return ProviderResponse(
                         content=[
                             TextBlock(text="Fixing the issue..."),
@@ -570,18 +611,51 @@ class MockProvider:
                         stop_reason="tool_use",
                     )
 
-            # Default single-tool branch for other tests
-            has_any_tool_use = any(
-                msg.get("role") == "assistant" and "tool_use" in str(msg.get("content", "")) for msg in messages
-            )
-            if not has_any_tool_use:
-                # Workspace List Request
-                if "List the files" in last_text or "SYSTEM_HEARTBEAT" in last_text:
-                    # ... (rest of old logic)
-                    pass
+            # 3. Workspace List / Heartbeat
+            if "List the files" in last_text or "SYSTEM_HEARTBEAT" in last_text:
+                if "completed the proactive scan" not in full_history_text:
+                    return ProviderResponse(
+                        content=[
+                            TextBlock(
+                                text="I have successfully completed the proactive scan and verified alignment with SOUL.md."
+                            )
+                        ],
+                        stop_reason="end_turn",
+                    )
+
+            # 4. Memory Isolation Test
+            if "wonderland" in full_history_text.lower():
+                has_memorized = False
+                for m in messages:
+                    if m.get("role") == "assistant":
+                        c_list = m.get("content")
+                        if isinstance(c_list, list):
+                            for c in c_list:
+                                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "memorize":
+                                    has_memorized = True
+                                    break
+                    if has_memorized:
+                        break
+
+                if not has_memorized:
+                    return ProviderResponse(
+                        content=[
+                            TextBlock(text="Memorizing Alice's secret..."),
+                            ToolUseBlock(
+                                id="mem_alice_secret",
+                                name="memorize",
+                                input={"content": "Alice's secret is: WonderLand.", "importance": 0.9},
+                            ),
+                        ],
+                        stop_reason="tool_use",
+                    )
 
         # Final Answer if no more tools needed
+        text = "I have finished the complex task."
+        if "proactive scan" in full_history_text.lower() or "system_heartbeat" in full_history_text.lower():
+            text = "I have successfully completed the proactive scan and verified alignment with SOUL.md."
+
         return ProviderResponse(
-            content=[TextBlock(text="I have finished the complex task.")],
+            content=[TextBlock(text=text)],
             stop_reason="end_turn",
         )

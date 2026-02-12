@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import lancedb
@@ -14,7 +15,11 @@ class MemoryEntry(BaseModel):
 
 
 class VectorStore:
-    def __init__(self, db_path: str = "./mirai_vectors"):
+    def __init__(self, db_path: str | None = None):
+        if db_path is None:
+            # Standardize on a project-relative path
+            cwd = os.getcwd()
+            db_path = os.path.join(cwd, "mirai_vectors")
         self.db_path = db_path
         self.db = lancedb.connect(db_path)
         self.table_name = "memories"
@@ -48,11 +53,11 @@ class VectorStore:
             for entry in entries
         ]
 
-        if self.table_name in self.db.table_names():
+        if self.table_name in self.db.list_tables():
             table = self.db.open_table(self.table_name)
             table.add(data)
         else:
-            self.db.create_table(self.table_name, data=data, schema=self._get_schema(dim))
+            self.db.create_table(self.table_name, data=data, schema=self._get_schema(dim), exist_ok=True)
 
     async def search(self, vector: list[float], limit: int = 5, filter: str | None = None):
         if self.table_name not in self.db.list_tables():
@@ -62,5 +67,4 @@ class VectorStore:
         query = table.search(vector).limit(limit)
         if filter:
             query = query.where(filter)
-
         return query.to_list()
