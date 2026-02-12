@@ -2,11 +2,14 @@
 
 import os
 import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
 load_dotenv()
 
@@ -20,6 +23,7 @@ from mirai.agent.tools.workspace import WorkspaceTool  # noqa: E402
 from mirai.config import MiraiConfig  # noqa: E402
 from mirai.db.session import init_db  # noqa: E402
 from mirai.logging import get_logger, setup_logging  # noqa: E402
+from mirai.tracing import setup_tracing  # noqa: E402
 
 log = get_logger("mirai.main")
 
@@ -28,15 +32,43 @@ class ChatRequest(BaseModel):
     message: str
 
 
+# ---------------------------------------------------------------------------
 # Global instances
+# ---------------------------------------------------------------------------
 agent: AgentLoop | None = None
 heartbeat: HeartbeatManager | None = None
 config: MiraiConfig | None = None
+_start_time: float = time.monotonic()
+
+# ---------------------------------------------------------------------------
+# Rate limiting (zero-dependency, in-memory)
+# ---------------------------------------------------------------------------
+# Concurrency gate: max simultaneous LLM calls
+_chat_semaphore = asyncio.Semaphore(3)
+
+# Per-IP sliding window: {ip: [timestamps]}
+_rate_limits: dict[str, list[float]] = defaultdict(list)
+_RATE_WINDOW = 60.0  # seconds
+_RATE_MAX = 20  # requests per window
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Return True if the request is within rate limits."""
+    now = time.monotonic()
+    timestamps = _rate_limits[client_ip]
+    # Purge expired entries
+    _rate_limits[client_ip] = [t for t in timestamps if now - t < _RATE_WINDOW]
+    if len(_rate_limits[client_ip]) >= _RATE_MAX:
+        return False
+    _rate_limits[client_ip].append(now)
+    return True
 
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    global agent, heartbeat, config
+    global agent, heartbeat, config, _start_time
+    _start_time = time.monotonic()
+
     # Load configuration (TOML > env vars > defaults)
     config = MiraiConfig.load()
 
@@ -45,6 +77,14 @@ async def lifespan(app_instance: FastAPI):
     setup_logging(json_output=json_output, level=config.server.log_level)
 
     log.info("config_loaded", model=config.llm.default_model, host=config.server.host, port=config.server.port)
+
+    # Setup OpenTelemetry tracing
+    console_traces = os.getenv("OTEL_TRACES_CONSOLE", "").lower() in ("1", "true")
+    setup_tracing(service_name="mirai", console=console_traces)
+
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app_instance)
 
     # Initialize SQLite tables
     await init_db(config.database.sqlite_url)
@@ -134,25 +174,141 @@ async def structlog_access_log(request: Request, call_next) -> Response:  # type
     return response
 
 
+# ---------------------------------------------------------------------------
+# Health check (enhanced)
+# ---------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
-    """Simple health check for the watchdog."""
-    return {"status": "ok", "pid": os.getpid()}
+    """Enhanced health check with system metrics."""
+    import resource
+
+    rusage = resource.getrusage(resource.RUSAGE_SELF)
+    memory_mb = round(rusage.ru_maxrss / (1024 * 1024), 1)  # macOS: bytes → MB
+
+    provider_name = type(agent.provider).__name__ if agent else None
+    model_name = getattr(agent.provider, "model", None) if agent else None
+
+    return {
+        "status": "ok" if agent else "degraded",
+        "pid": os.getpid(),
+        "uptime_seconds": round(time.monotonic() - _start_time, 1),
+        "memory_mb": memory_mb,
+        "agent_ready": agent is not None,
+        "provider": provider_name,
+        "model": model_name,
+    }
 
 
+# ---------------------------------------------------------------------------
+# Chat endpoint (with rate limiting)
+# ---------------------------------------------------------------------------
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, req: Request):
     """Entry point for interacting with the AI Collaborator."""
     if not agent:
         raise HTTPException(status_code=500, detail="AgentLoop not initialized. Check API keys.")
+
+    # Rate limit check
+    client_ip = req.client.host if req.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded ({_RATE_MAX} requests per {int(_RATE_WINDOW)}s). Try again later.",
+            headers={"Retry-After": str(int(_RATE_WINDOW))},
+        )
+
+    # Concurrency gate
+    try:
+        async with asyncio.timeout(1.0):
+            await _chat_semaphore.acquire()
+    except TimeoutError:
+        raise HTTPException(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            detail="Server busy — too many concurrent requests. Try again shortly.",
+            headers={"Retry-After": "5"},
+        ) from None
 
     try:
         response = await agent.run(request.message)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        _chat_semaphore.release()
 
 
+# ---------------------------------------------------------------------------
+# SSE Streaming endpoint
+# ---------------------------------------------------------------------------
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest, req: Request):
+    """Stream the agent response as Server-Sent Events."""
+    if not agent:
+        raise HTTPException(status_code=500, detail="AgentLoop not initialized.")
+
+    client_ip = req.client.host if req.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={"Retry-After": str(int(_RATE_WINDOW))},
+        )
+
+    async def _event_generator():
+        try:
+            async with asyncio.timeout(1.0):
+                await _chat_semaphore.acquire()
+        except TimeoutError:
+            yield "event: error\ndata: Server busy\n\n"
+            return
+
+        try:
+            async for event in agent.stream_run(request.message):
+                yield f"event: {event['event']}\ndata: {event['data']}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {e!s}\n\n"
+        finally:
+            _chat_semaphore.release()
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint for multi-turn chat
+# ---------------------------------------------------------------------------
+@app.websocket("/ws/chat")
+async def websocket_chat(ws: WebSocket):
+    """Full-duplex WebSocket for multi-turn conversations."""
+    await ws.accept()
+    log.info("ws_connected", client=ws.client.host if ws.client else "unknown")
+
+    try:
+        while True:
+            data = await ws.receive_json()
+            message = data.get("message", "")
+            if not message:
+                await ws.send_json({"event": "error", "data": "Empty message"})
+                continue
+
+            if not agent:
+                await ws.send_json({"event": "error", "data": "Agent not initialized"})
+                continue
+
+            try:
+                async for event in agent.stream_run(message):
+                    await ws.send_json(event)
+            except Exception as e:
+                await ws.send_json({"event": "error", "data": str(e)})
+
+    except WebSocketDisconnect:
+        log.info("ws_disconnected")
+    except Exception as e:
+        log.error("ws_error", error=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Server startup
+# ---------------------------------------------------------------------------
 def main():
     """Start the Mirai server using Granian (Rust ASGI server)."""
     from granian import Granian
