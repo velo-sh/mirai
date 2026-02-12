@@ -99,6 +99,7 @@ class AntigravityProvider:
         "claude-sonnet-4-latest": "claude-sonnet-4-5",
         "claude-opus-4-20250514": "claude-opus-4-5-thinking",
         "claude-opus-4-latest": "claude-opus-4-5-thinking",
+        "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
         # Claude 3.x series (legacy)
         "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
         "claude-3-5-sonnet-latest": "claude-sonnet-4-5",
