@@ -35,6 +35,8 @@ class ToolUseBlock(BaseModel):
     id: str
     name: str
     input: dict[str, Any]
+    # Gemini 3 thought signature — must be preserved and replayed in history
+    thought_signature: str | None = None
 
 
 # Union type for all content block variants

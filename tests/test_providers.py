@@ -187,9 +187,8 @@ class TestConvertMessages:
     def test_empty_content_produces_text_part(self):
         messages = [{"role": "user", "content": ""}]
         result = AntigravityProvider._convert_messages(messages)
-        # Empty string still creates a text part with empty text
-        assert len(result) == 1
-        assert result[0]["parts"] == [{"text": ""}]
+        # Empty string content is now skipped for Claude compatibility
+        assert len(result) == 0
 
 
 # ---------------------------------------------------------------------------
