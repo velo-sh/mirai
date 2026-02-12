@@ -189,3 +189,43 @@ class TestSearchTraces:
         assert len(upper_results) == 1
         # lower_results may match depending on DuckDB version collation
         assert len(lower_results) >= 0
+
+
+# ---------------------------------------------------------------------------
+# Feishu History Persistence
+# ---------------------------------------------------------------------------
+
+
+class TestFeishuHistory:
+    @pytest.mark.asyncio
+    async def test_save_and_retrieve_history(self, storage):
+        chat_id = "chat-123"
+        await storage.save_feishu_history(chat_id, "user", "Hello Mira")
+        await storage.save_feishu_history(chat_id, "assistant", "Hello! How can I help?")
+
+        history = await storage.get_feishu_history(chat_id)
+        assert len(history) == 2
+        assert history[0] == {"role": "user", "content": "Hello Mira"}
+        assert history[1] == {"role": "assistant", "content": "Hello! How can I help?"}
+
+    @pytest.mark.asyncio
+    async def test_history_limit_and_order(self, storage):
+        chat_id = "chat-456"
+        # Insert 5 turns (10 messages)
+        for i in range(5):
+            await storage.save_feishu_history(chat_id, "user", f"User {i}")
+            await storage.save_feishu_history(chat_id, "assistant", f"AI {i}")
+
+        # Limit to last 2 turns (4 messages)
+        history = await storage.get_feishu_history(chat_id, limit=4)
+        assert len(history) == 4
+        # Ordered chronologically: oldest of the subset first
+        assert history[0]["content"] == "User 3"
+        assert history[1]["content"] == "AI 3"
+        assert history[2]["content"] == "User 4"
+        assert history[3]["content"] == "AI 4"
+
+    @pytest.mark.asyncio
+    async def test_empty_history_returns_empty_list(self, storage):
+        history = await storage.get_feishu_history("nonexistent-chat")
+        assert history == []

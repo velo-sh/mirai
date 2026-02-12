@@ -137,6 +137,7 @@ class TestFeishuAgentE2E:
             app_id="test_app_id",
             app_secret="test_app_secret",
             message_handler=handle_message,
+            storage=agent.l3_storage,
         )
         receiver._reply_client = mock_reply_client
 
@@ -202,6 +203,7 @@ class TestFeishuAgentE2E:
             app_id="id",
             app_secret="secret",
             message_handler=handler,
+            storage=agent.l3_storage,
         )
         receiver._reply_client = mock_client
 
@@ -235,6 +237,7 @@ class TestFeishuAgentE2E:
             app_id="id",
             app_secret="secret",
             message_handler=exploding_handler,
+            storage=None,
         )
         receiver._reply_client = mock_client
 

@@ -6,8 +6,8 @@ and identity-anchored system prompts.
 """
 
 import os
+import re
 from collections.abc import Sequence
-from functools import lru_cache
 from typing import Any
 
 import orjson
@@ -24,7 +24,6 @@ from mirai.tracing import get_tracer
 log = get_logger("mirai.agent")
 
 
-@lru_cache(maxsize=8)
 def _load_soul(collaborator_id: str) -> str:
     """Load SOUL.md from disk (cached after first read)."""
     soul_path = f"mirai/collaborator/{collaborator_id}_SOUL.md"
@@ -73,7 +72,8 @@ class AgentLoop:
                 self.name = "Unknown Collaborator"
                 self.base_system_prompt = "You are a helpful AI collaborator."
 
-        self.soul_content = _load_soul(self.collaborator_id)
+        # Lazy loaded per-request in _run_impl
+        pass
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] = None):
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
@@ -89,22 +89,23 @@ class AgentLoop:
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Run the agent loop for a single message.
+        """Run the agent loop for a single message with automatic retry."""
+        max_attempts = 2
+        last_result = ""
 
-        Args:
-            message: The user's message text.
-            model: Optional model override.
-            history: Optional prior conversation turns (list of
-                     {"role": "user"|"assistant", "content": str} dicts).
-                     These are prepended to the messages sent to the LLM
-                     so the agent has multi-turn context.
-        """
-        tracer = get_tracer()
-        with tracer.start_as_current_span("agent.run") as span:
-            span.set_attribute("message.length", len(message))
-            if history:
-                span.set_attribute("history.turns", len(history))
-            return await self._run_impl(message, model, history)
+        for attempt in range(1, max_attempts + 1):
+            result = await self._run_impl(message, model, history)
+
+            # Check if we got the "empty response" error string
+            if "failed to generate a vocal response" in result:
+                log.warning("agent_run_empty_result", attempt=attempt, next_retry=attempt < max_attempts)
+                last_result = result
+                continue
+
+            return result
+
+        log.error("agent_run_failed_after_retries", attempts=max_attempts)
+        return last_result
 
     async def _run_impl(
         self,
@@ -112,136 +113,171 @@ class AgentLoop:
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> str:
+        """Internal execution of the agent loop for a single message."""
         tracer = get_tracer()
-        # Use provider's configured model as default
-        model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
-        # Archive incoming user message
-        await self._archive_trace(message, "message", {"role": "user"})
+        with tracer.start_as_current_span("agent.run") as span:
+            # 0. Reload SOUL per-request for adaptive identity
+            self.soul_content = _load_soul(self.collaborator_id)
 
-        # 2. Total Recall: Semantic search in L2 (RAM)
-        query_vector = await self.embedder.get_embeddings(message)
-        memories = await self.l2_storage.search(
-            vector=query_vector, limit=3, filter=f"collaborator_id = '{self.collaborator_id}'"
-        )
+            span.set_attribute("message.length", len(message))
+            if history:
+                span.set_attribute("history.turns", len(history))
 
-        memory_context = ""
-        if memories:
-            trace_ids = []
-            for mem in memories:
-                # Use metadata which is stored as JSON string in LanceDB
-                meta = orjson.loads(mem["metadata"])
-                if "trace_id" in meta:
-                    trace_ids.append(meta["trace_id"])
+            # Use provider's configured model as default
+            model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
 
-            # 3. Fetch raw context from L3 (HDD)
-            raw_traces = await self.l3_storage.get_traces_by_ids(trace_ids)
-            if raw_traces:
-                memory_context = "\n### Recovered Memories (L3 Raw Context):\n"
-                for trace in raw_traces:
-                    memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
+            # 1. Archive incoming user message
+            await self._archive_trace(message, "message", {"role": "user"})
 
-        # 4. Construct enriched system prompt using Sandwich Pattern
-        # Bottom-up Identity Anchor
-        full_system_prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
-
-        if memory_context:
-            full_system_prompt += (
-                "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
+            # 2. Total Recall: Semantic search in L2 (RAM)
+            query_vector = await self.embedder.get_embeddings(message)
+            memories = await self.l2_storage.search(
+                vector=query_vector, limit=3, filter=f"collaborator_id = '{self.collaborator_id}'"
             )
 
-        # Top-down Identity Anchor (Sandwich)
-        full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
+            memory_context = ""
+            if memories:
+                trace_ids = []
+                for mem in memories:
+                    # Use metadata which is stored as JSON string in LanceDB
+                    meta = orjson.loads(mem["metadata"])
+                    if "trace_id" in meta:
+                        trace_ids.append(meta["trace_id"])
 
-        # Build messages with conversation history for multi-turn context
-        messages: list[dict[str, Any]] = []
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": message})
-        tool_definitions = [tool.definition for tool in self.tools.values()]
+                # 3. Fetch raw context from L3 (HDD)
+                raw_traces = await self.l3_storage.get_traces_by_ids(trace_ids)
+                if raw_traces:
+                    memory_context = "\n### Recovered Memories (L3 Raw Context):\n"
+                    for trace in raw_traces:
+                        memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
 
-        # Phase 1: Internal Monologue (Thinking)
-        log.info("phase_thinking", collaborator=self.collaborator_id)
-        monologue_prompt = "Before responding or using tools, analyze the situation. What is your plan? Use <thinking>...</thinking> tags."
+            # 4. Construct enriched system prompt using Sandwich Pattern
+            # Bottom-up Identity Anchor
+            full_system_prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
 
-        temp_messages = messages + [{"role": "user", "content": monologue_prompt}]
+            if memory_context:
+                full_system_prompt += (
+                    "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
+                )
 
-        with tracer.start_as_current_span("agent.think"):
-            think_response: ProviderResponse = await self.provider.generate_response(
-                model=model,
-                system=full_system_prompt,
-                messages=temp_messages,
-                tools=[],
+            # Top-down Identity Anchor (Sandwich)
+            full_system_prompt += "\n\n# IDENTITY REINFORCEMENT\nRemember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently."
+
+            # Build messages with conversation history for multi-turn context
+            messages: list[dict[str, Any]] = []
+            if history:
+                messages.extend(history)
+            messages.append({"role": "user", "content": message})
+            tool_definitions = [tool.definition for tool in self.tools.values()]
+
+            # Phase 1: Internal Monologue (Thinking)
+            log.info("phase_thinking", collaborator=self.collaborator_id)
+            monologue_prompt = (
+                "Analyze the user message and plan your response. Use <thinking>...</thinking> tags for your private internal thoughts. "
+                "DO NOT output the final response yet. Just strategy and tool choice."
             )
+            temp_messages = messages + [{"role": "user", "content": monologue_prompt}]
 
-        monologue_text = think_response.text()
-
-        await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
-
-        # Phase 2: Action Loop (Tools)
-        while True:
-            with tracer.start_as_current_span("agent.act"):
-                response: ProviderResponse = await self.provider.generate_response(
-                    model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
+            with tracer.start_as_current_span("agent.think"):
+                think_response: ProviderResponse = await self.provider.generate_response(
+                    model=model,
+                    system=full_system_prompt,
+                    messages=temp_messages,
+                    tools=[],
                 )
 
-            # Process assistant response
-            assistant_content: list[dict[str, Any]] = []
-            tool_calls: list[ToolUseBlock] = []
+            monologue_text = think_response.text()
+            await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
 
-            for block in response.content:
-                if isinstance(block, TextBlock):
-                    assistant_content.append({"type": "text", "text": block.text})
-                elif isinstance(block, ToolUseBlock):
-                    tool_calls.append(block)
-                    assistant_content.append(block.model_dump())
+            # Inject thinking into the Action Phase so the model follows through on its plan
+            # Enforce thinking tags if the model ignored them to prevent Phase 2 from thinking it already replied
+            monologue_wrapped = monologue_text
+            if "<thinking>" not in monologue_text:
+                monologue_wrapped = f"<thinking>\n{monologue_text}\n</thinking>"
+            messages.append({"role": "assistant", "content": monologue_wrapped})
 
-            messages.append({"role": "assistant", "content": assistant_content})
-
-            if response.stop_reason == "tool_use":
-                for tool_call in tool_calls:
-                    log.info("tool_call", tool=tool_call.name, input=tool_call.input)
-
-                    if tool_call.name in self.tools:
-                        result = await self.tools[tool_call.name].execute(**tool_call.input)
-                    else:
-                        result = f"Error: Tool {tool_call.name} not found."
-
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_call.id,
-                                    "content": result,
-                                }
-                            ],
-                        }
-                    )
-            else:
-                # Final response reached - Phase 3: Critique
-                final_text = "".join(c["text"] for c in assistant_content if c.get("type") == "text")
-
-                log.info("phase_critique", collaborator=self.collaborator_id)
-                critique_prompt = (
-                    f"Review your draft response below and refine it if needed.\n\n"
-                    f'Draft: "{final_text}"\n\n'
-                    f"Rules:\n"
-                    f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
-                    f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
-                    f"- If the draft is already perfect, output it exactly as-is."
-                )
-
-                critique_messages = messages + [{"role": "user", "content": critique_prompt}]
-                with tracer.start_as_current_span("agent.critique"):
-                    refined_response: ProviderResponse = await self.provider.generate_response(
-                        model=model, system=full_system_prompt, messages=critique_messages, tools=[]
+            # Phase 2: Action Loop (Tools)
+            while True:
+                with tracer.start_as_current_span("agent.act"):
+                    response: ProviderResponse = await self.provider.generate_response(
+                        model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
                     )
 
-                refined_text = refined_response.text()
+                # Process assistant response
+                assistant_content: list[dict[str, Any]] = []
+                tool_calls: list[ToolUseBlock] = []
 
-                await self._archive_trace(refined_text, "message", {"role": "assistant"})
-                return refined_text
+                for block in response.content:
+                    if isinstance(block, TextBlock):
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif isinstance(block, ToolUseBlock):
+                        tool_calls.append(block)
+                        assistant_content.append(block.model_dump())
+
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                if response.stop_reason == "tool_use":
+                    for tool_call in tool_calls:
+                        log.info("tool_call", tool=tool_call.name, input=tool_call.input)
+
+                        if tool_call.name in self.tools:
+                            result = await self.tools[tool_call.name].execute(**tool_call.input)
+                        else:
+                            result = f"Error: Tool {tool_call.name} not found."
+
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_call.id,
+                                        "content": result,
+                                    }
+                                ],
+                            }
+                        )
+                else:
+                    # Final response reached - Phase 3: Critique
+                    final_text = "".join(c["text"] for c in assistant_content if c.get("type") == "text")
+                    log.info("phase_critique_start", draft_length=len(final_text))
+
+                    critique_prompt = (
+                        f"Review your draft response below and refine it if needed.\n\n"
+                        f'Draft: "{final_text}"\n\n'
+                        f"Rules:\n"
+                        f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
+                        f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
+                        f"- If the draft is already perfect, output it exactly as-is."
+                    )
+
+                    critique_messages = messages + [{"role": "user", "content": critique_prompt}]
+                    with tracer.start_as_current_span("agent.critique"):
+                        refined_response: ProviderResponse = await self.provider.generate_response(
+                            model=model, system=full_system_prompt, messages=critique_messages, tools=[]
+                        )
+
+                    refined_text = refined_response.text().strip()
+                    log.info("phase_critique_done", refined_length=len(refined_text))
+
+                    if not refined_text:
+                        if final_text:
+                            log.warning("critique_returned_empty", fallback="using_final_text")
+                            refined_text = final_text
+                        else:
+                            # If even Phase 2 was empty, salvage from monologue if it looked like an answer
+                            log.error("agent_run_produced_no_text", fallback="salvaging_from_thinking")
+
+                            # Remove thinking tags and see if there's anything useful
+                            salvaged = re.sub(r"<thinking>.*?</thinking>", "", monologue_text, flags=re.DOTALL).strip()
+                            if not salvaged and monologue_text:
+                                # If it was ALL thinking but had good content inside, extract it
+                                salvaged = monologue_text.replace("<thinking>", "").replace("</thinking>", "").strip()
+
+                            refined_text = salvaged or "I acknowledge your message. (Personality online)"
+
+                    await self._archive_trace(refined_text, "message", {"role": "assistant"})
+                    return refined_text
 
     async def stream_run(self, message: str, model: str | None = None):
         """Async generator that yields SSE event dicts during the agent cycle.

@@ -8,6 +8,7 @@ Maintains per-chat conversation history for multi-turn context.
 import asyncio
 import threading
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import lark_oapi as lark
 import orjson
@@ -30,6 +31,7 @@ class FeishuEventReceiver:
         app_id: str,
         app_secret: str,
         message_handler: Callable[[str, str, str, list[dict]], Awaitable[str]],
+        storage: Any = None,
         encrypt_key: str = "",
         verification_token: str = "",
     ):
@@ -44,6 +46,7 @@ class FeishuEventReceiver:
         self._app_id = app_id
         self._app_secret = app_secret
         self._message_handler = message_handler
+        self._storage = storage
         self._encrypt_key = encrypt_key
         self._verification_token = verification_token
         self._ws_client: lark.ws.Client | None = None
@@ -165,8 +168,18 @@ class FeishuEventReceiver:
                 log.error("feishu_typing_failed", code=placeholder_resp.code, msg=placeholder_resp.msg)
 
             # Step 2: Get conversation history for this chat
-            history = self._conversations.get(chat_id, [])
-            log.info("conversation_context", chat_id=chat_id, history_turns=len(history))
+            history = self._conversations.get(chat_id)
+            if history is None:
+                # Cache miss - try to load from persistent storage
+                if self._storage:
+                    history = await self._storage.get_feishu_history(chat_id, limit=self.MAX_HISTORY_TURNS * 2)
+                    self._conversations[chat_id] = history
+                    log.info("history_loaded_from_storage", chat_id=chat_id, turns=len(history) // 2)
+                else:
+                    history = []
+                    self._conversations[chat_id] = history
+
+            log.info("conversation_context", chat_id=chat_id, history_turns=len(history) // 2)
 
             # Step 3: Process the message through AgentLoop with history
             reply_text = await self._message_handler(sender_id, text, chat_id, history)
@@ -193,12 +206,12 @@ class FeishuEventReceiver:
                 log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
 
             # Step 5: Record this exchange in conversation history
-            self._record_exchange(chat_id, text, reply_text)
+            await self._record_exchange(chat_id, text, reply_text)
 
         except Exception as e:
             log.error("feishu_reply_error", error=str(e), exc_info=True)
 
-    def _record_exchange(self, chat_id: str, user_msg: str, assistant_msg: str) -> None:
+    async def _record_exchange(self, chat_id: str, user_msg: str, assistant_msg: str) -> None:
         """Append a user/assistant exchange to the chat's conversation history.
 
         Maintains a rolling window of MAX_HISTORY_TURNS messages to prevent
@@ -210,6 +223,14 @@ class FeishuEventReceiver:
         history = self._conversations[chat_id]
         history.append({"role": "user", "content": user_msg})
         history.append({"role": "assistant", "content": assistant_msg})
+
+        # Save to persistent storage if available
+        if self._storage:
+            try:
+                await self._storage.save_feishu_history(chat_id, "user", user_msg)
+                await self._storage.save_feishu_history(chat_id, "assistant", assistant_msg)
+            except Exception as e:
+                log.error("history_save_failed", chat_id=chat_id, error=str(e))
 
         # Trim to max turns (each turn = 2 messages: user + assistant)
         max_messages = self.MAX_HISTORY_TURNS * 2
