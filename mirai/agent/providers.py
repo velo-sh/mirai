@@ -21,6 +21,7 @@ from tenacity import (
 
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.logging import get_logger
+from mirai.tracing import get_tracer
 
 log = get_logger("mirai.providers")
 
@@ -340,38 +341,43 @@ class AntigravityProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ProviderResponse:
-        await self._ensure_fresh_token()
+        tracer = get_tracer()
+        with tracer.start_as_current_span("provider.antigravity.generate") as span:
+            span.set_attribute("llm.model", model)
+            await self._ensure_fresh_token()
 
-        # Remap model name if needed for Cloud Code Assist
-        effective_model = self.MODEL_MAP.get(model, model)
-        if effective_model != model:
-            log.info("model_remapped", original=model, effective=effective_model)
-        elif model not in self.MODEL_MAP:
-            log.warning("model_not_in_map", model=model)
+            # Remap model name if needed for Cloud Code Assist
+            effective_model = self.MODEL_MAP.get(model, model)
+            if effective_model != model:
+                log.info("model_remapped", original=model, effective=effective_model)
+                span.set_attribute("llm.effective_model", effective_model)
+            elif model not in self.MODEL_MAP:
+                log.warning("model_not_in_map", model=model)
 
-        body = self._build_request(effective_model, system, messages, tools)
-        headers = self._build_headers()
+            body = self._build_request(effective_model, system, messages, tools)
+            headers = self._build_headers()
 
-        # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)
-        body_bytes = orjson.dumps(body)
+            # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)
+            body_bytes = orjson.dumps(body)
 
-        url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
-        response = await self._http.post(url, content=body_bytes, headers=headers)
+            url = f"{self.DEFAULT_ENDPOINT}/v1internal:streamGenerateContent?alt=sse"
+            response = await self._http.post(url, content=body_bytes, headers=headers)
+            span.set_attribute("http.status_code", response.status_code)
 
-        if response.status_code == 200:
-            return self._parse_sse_response(response.text)
+            if response.status_code == 200:
+                return self._parse_sse_response(response.text)
 
-        error_text = response.text[:500]
-        log.error("api_error", status=response.status_code, detail=error_text[:200])
+            error_text = response.text[:500]
+            log.error("api_error", status=response.status_code, detail=error_text[:200])
 
-        if response.status_code == 401:
-            self.credentials["expires"] = 0
-            raise RuntimeError("Cloud Code Assist: authentication expired")
+            if response.status_code == 401:
+                self.credentials["expires"] = 0
+                raise RuntimeError("Cloud Code Assist: authentication expired")
 
-        if response.status_code in (429, 503):
-            raise _RetryableAPIError(response.status_code, error_text[:200])
+            if response.status_code in (429, 503):
+                raise _RetryableAPIError(response.status_code, error_text[:200])
 
-        raise RuntimeError(f"Cloud Code Assist API error ({response.status_code}): {error_text}")
+            raise RuntimeError(f"Cloud Code Assist API error ({response.status_code}): {error_text}")
 
 
 def create_provider(model: str = "claude-sonnet-4-20250514") -> AnthropicProvider | AntigravityProvider:
