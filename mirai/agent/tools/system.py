@@ -131,7 +131,7 @@ class SystemTool(BaseTool):
         elif action == "usage":
             return await self._usage()
         elif action == "list_models":
-            return self._list_models()
+            return await self._list_models()
         elif action == "set_active_model":
             return await self._set_active_model(model)
         elif action == "patch_config":
@@ -158,11 +158,20 @@ class SystemTool(BaseTool):
     # ------------------------------------------------------------------
     # Action: list_models
     # ------------------------------------------------------------------
-    def _list_models(self) -> str:
+    async def _list_models(self) -> str:
         """Return all available models across all configured providers."""
         if not self._registry:
             return "Error: Model registry not available."
-        return self._registry.get_catalog_text()
+        # Fetch quota data if provider has a QuotaManager
+        quota_data: dict[str, float] | None = None
+        if self._provider and hasattr(self._provider, "quota_manager"):
+            qm = self._provider.quota_manager
+            try:
+                await qm._maybe_refresh()
+            except Exception:
+                log.warning("quota_refresh_failed_in_list_models")
+            quota_data = dict(qm._quotas)  # use stale data on refresh failure
+        return self._registry.get_catalog_text(quota_data=quota_data)
 
     # ------------------------------------------------------------------
     # Action: set_active_model
@@ -358,6 +367,24 @@ class SystemTool(BaseTool):
             import subprocess
 
             await asyncio.sleep(8.0)
+
+            # Save restart event to trace history before closing storage
+            if self._agent_loop:
+                try:
+                    await self._agent_loop._archive_trace(
+                        "restart initiated by system tool", "system", {"action": "restart"}
+                    )
+                except Exception:
+                    pass  # storage may already be closing
+
+            # Close DuckDB before spawning replacement to release file locks
+            if self._agent_loop and hasattr(self._agent_loop, "l3_storage"):
+                try:
+                    self._agent_loop.l3_storage.close()
+                    log.info("duckdb_closed_for_restart")
+                except Exception as exc:
+                    log.warning("duckdb_close_error", error=str(exc))
+
             log.info("restart_executing", argv=sys.argv)
 
             # Spawn a new independent process (new session = new process group)
@@ -375,8 +402,8 @@ class SystemTool(BaseTool):
                 os.killpg(os.getpgid(0), signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            # If SIGTERM didn't do it, force kill
-            await asyncio.sleep(1.0)
+            # Give SIGTERM time to clean up (3s instead of 1s)
+            await asyncio.sleep(3.0)
             try:
                 os.killpg(os.getpgid(0), signal.SIGKILL)
             except ProcessLookupError:

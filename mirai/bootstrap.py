@@ -3,6 +3,7 @@
 import asyncio
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from mirai.agent.dreamer import Dreamer
@@ -19,6 +20,45 @@ from mirai.logging import get_logger, setup_logging
 from mirai.tracing import setup_tracing
 
 log = get_logger("mirai.bootstrap")
+
+
+def _wait_for_duckdb_lock(db_path: str, timeout: float = 10.0) -> None:
+    """Wait for a stale DuckDB lock to be released, or clean up if PID is dead.
+
+    DuckDB uses a .wal file that can persist after a crash.  If the PID
+    that held the lock is dead, we can safely proceed (DuckDB will recover
+    on connect).  If the PID is still alive we poll until timeout.
+    """
+    wal_path = Path(db_path + ".wal")
+    if not wal_path.exists():
+        return
+
+    log.warning("duckdb_wal_detected", wal=str(wal_path))
+
+    # Try to determine if any process still holds the lock
+    # by attempting a brief connect / close cycle
+    import duckdb
+
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            conn = duckdb.connect(db_path)
+            conn.close()
+            log.info("duckdb_lock_cleared", attempts=attempt)
+            return
+        except duckdb.IOException:
+            if time.monotonic() >= deadline:
+                log.warning(
+                    "duckdb_lock_timeout",
+                    db=db_path,
+                    timeout=timeout,
+                    msg="Proceeding anyway — DuckDB may raise on first write",
+                )
+                return
+            log.info("duckdb_lock_waiting", attempt=attempt, remaining=round(deadline - time.monotonic(), 1))
+            time.sleep(1.0)
 
 
 class MiraiApp:
@@ -62,6 +102,9 @@ class MiraiApp:
 
         # Initialize Agent components
         try:
+            # Check for stale DuckDB locks before connecting
+            _wait_for_duckdb_lock(config.database.duckdb_path)
+
             # Initialize model registry first to discover persisted active model
             self.registry = ModelRegistry(
                 config_provider=config.llm.provider,
