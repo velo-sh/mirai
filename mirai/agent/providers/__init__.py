@@ -7,7 +7,7 @@ Supports OpenAI-compatible (base), Anthropic, and Google Cloud Code Assist
 
 from mirai.agent.providers.anthropic import AnthropicProvider
 from mirai.agent.providers.antigravity import AntigravityProvider, _RetryableAPIError
-from mirai.agent.providers.base import ProviderProtocol
+from mirai.agent.providers.base import ModelInfo, ProviderProtocol, UsageSnapshot
 from mirai.agent.providers.embeddings import MockEmbeddingProvider
 from mirai.agent.providers.factory import create_provider
 from mirai.agent.providers.minimax import MiniMaxProvider

@@ -17,6 +17,7 @@ from tenacity import (
 )
 
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.logging import get_logger
 
 log = get_logger("mirai.providers.anthropic")
@@ -28,12 +29,30 @@ class AnthropicProvider:
     Converts OpenAI-format messages/tools to Anthropic Messages API format.
     """
 
+    MODEL_CATALOG = [
+        ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", context_window=200_000, max_tokens=8192),
+        ModelInfo(id="claude-opus-4-20250514", name="Claude Opus 4", context_window=200_000, max_tokens=8192, reasoning=True),
+        ModelInfo(id="claude-haiku-3-5-20241022", name="Claude Haiku 3.5", context_window=200_000, max_tokens=4096),
+    ]
+
     def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY must be set")
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
         self.model = model
+
+    @property
+    def provider_name(self) -> str:
+        return "anthropic"
+
+    async def list_models(self) -> list[ModelInfo]:
+        """Return static Claude model catalog."""
+        return list(self.MODEL_CATALOG)
+
+    async def get_usage(self) -> UsageSnapshot:
+        """Usage query not supported for Anthropic."""
+        return UsageSnapshot(provider="anthropic", error="not supported")
 
     @retry(
         retry=retry_if_exception_type(anthropic.RateLimitError),

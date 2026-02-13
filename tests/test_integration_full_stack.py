@@ -208,5 +208,5 @@ class TestIntegrationHealth:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["agent_ready"] is True
-        assert data["provider"] == "MockProvider"
+        assert data["provider"] == "mock"
         assert data["model"] == "mock-model"

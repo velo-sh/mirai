@@ -20,6 +20,7 @@ def _make_mock_agent():
     agent.run = AsyncMock(return_value="Mock response from agent")
     agent.provider = MagicMock()
     type(agent.provider).__name__ = "MockProvider"
+    agent.provider.provider_name = "mock"
     agent.provider.model = "mock-model"
 
     async def _stream(message):
@@ -98,7 +99,7 @@ class TestHealthCheck:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["agent_ready"] is True
-        assert data["provider"] == "MockProvider"
+        assert data["provider"] == "mock"
         assert data["model"] == "mock-model"
         assert "uptime_seconds" in data
         assert "memory_mb" in data

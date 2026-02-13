@@ -98,8 +98,9 @@ async def health_check():
         rusage = resource.getrusage(resource.RUSAGE_SELF)
         memory_mb = round(rusage.ru_maxrss / (1024 * 1024), 1)  # macOS: bytes → MB
 
-        provider_name = type(agent.provider).__name__ if agent else None
-        model_name = getattr(agent.provider, "model", None) if agent else None
+        provider = agent.provider if agent else None
+        provider_name = getattr(provider, "provider_name", type(provider).__name__) if provider else None
+        model_name = getattr(provider, "model", None) if provider else None
         start_time = getattr(_mirai, "start_time", 0) if _mirai else 0
 
         return {
@@ -115,6 +116,37 @@ async def health_check():
         import traceback
         traceback.print_exc()
         raise e
+
+
+@app.get("/models")
+async def list_models():
+    """Discover available models from the active provider."""
+    from dataclasses import asdict
+
+    agent = _mirai.agent if _mirai else None
+    if not agent or not hasattr(agent.provider, "list_models"):
+        return {"error": "no provider available"}
+
+    provider = agent.provider
+    models = await provider.list_models()
+    return {
+        "provider": getattr(provider, "provider_name", type(provider).__name__),
+        "current_model": provider.model,
+        "models": [asdict(m) for m in models],
+    }
+
+
+@app.get("/usage")
+async def get_usage():
+    """Query usage / quota from the active provider."""
+    from dataclasses import asdict
+
+    agent = _mirai.agent if _mirai else None
+    if not agent or not hasattr(agent.provider, "get_usage"):
+        return {"error": "no provider available"}
+
+    usage = await agent.provider.get_usage()
+    return asdict(usage)
 
 
 # ---------------------------------------------------------------------------
