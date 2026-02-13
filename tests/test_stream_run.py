@@ -15,12 +15,12 @@ from mirai.agent.tools.echo import EchoTool
 @pytest_asyncio.fixture
 async def agent():
     from unittest.mock import AsyncMock
-    
+
     # Mock storage to avoid DB locks
     mock_l3 = AsyncMock()
     mock_l3.append_trace = AsyncMock()
     mock_l3.get_traces_by_ids = AsyncMock(return_value=[])
-    
+
     # Define dependencies
     provider = MockProvider()
     tools = [EchoTool()]
@@ -28,11 +28,11 @@ async def agent():
     # Mock embedder with explicit method
     mock_embedder = AsyncMock()
     mock_embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
-    
+
     # Create loop with mocks
     loop = AgentLoop(
-        provider=provider, 
-        tools=tools, 
+        provider=provider,
+        tools=tools,
         collaborator_id="test-stream",
         l3_storage=mock_l3,
         l2_storage=AsyncMock(),
@@ -43,22 +43,21 @@ async def agent():
     loop.role = "tester"
     loop.base_system_prompt = "You are a test agent."
     loop.soul_content = ""
-    
+
     return loop
 
 
 class TestStreamRunEvents:
     @pytest.mark.asyncio
-    async def test_yields_thinking_event(self, agent):
-        """First event should be 'thinking'."""
+    async def test_first_event_is_chunk(self, agent):
+        """First event should be 'chunk' (single-pass, no separate thinking phase)."""
         events = []
         async for event in agent.stream_run("hello"):
             events.append(event)
-            if event["event"] == "thinking":
-                break
+            break  # only need the first event
 
         assert len(events) >= 1
-        assert events[0]["event"] == "thinking"
+        assert events[0]["event"] == "chunk"
         assert len(events[0]["data"]) > 0
 
     @pytest.mark.asyncio
@@ -94,12 +93,12 @@ class TestStreamRunEvents:
 
     @pytest.mark.asyncio
     async def test_event_sequence_order(self, agent):
-        """Event sequence: thinking → (chunks...) → done."""
+        """Event sequence: (chunks...) → done (single-pass, no thinking phase)."""
         event_types = []
         async for event in agent.stream_run("hello"):
             event_types.append(event["event"])
 
-        assert event_types[0] == "thinking"
+        assert event_types[0] == "chunk"
         assert event_types[-1] == "done"
 
         # Everything between should be chunk or tool_use

@@ -1,6 +1,6 @@
-"""Integration test for mirai.agent.loop — full Think→Act→Critique cycle with MockProvider."""
+"""Integration test for mirai.agent.loop — single-pass agent cycle with MockProvider."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -69,18 +69,18 @@ class TestAgentLoop:
 
     @pytest.mark.asyncio
     async def test_run_increments_provider_call_count(self, agent):
-        """Running the agent should invoke the provider multiple times (think + act + critique)."""
+        """Running the agent should invoke the provider at least once."""
         assert agent.provider.call_count == 0
         await agent.run("Tell me about yourself.")
-        # At minimum: thinking phase + action phase + critique phase = 3 calls
-        assert agent.provider.call_count >= 3
+        # Single-pass: at minimum one LLM call
+        assert agent.provider.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_run_archives_traces(self, agent):
-        """Agent should archive user message, thinking, and final response."""
+        """Agent should archive user message and final response."""
         await agent.run("Test message")
-        # _archive_trace should have been called at least 3 times
-        assert agent.l3_storage.append_trace.call_count >= 3
+        # _archive_trace: at least user message + assistant response = 2
+        assert agent.l3_storage.append_trace.call_count >= 2
 
 
 # ---------------------------------------------------------------------------

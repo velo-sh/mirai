@@ -37,8 +37,8 @@ async def test_heartbeat_proactive_insight_flow(duckdb_storage):
     l3 = duckdb_storage
     traces = await l3.get_recent_traces(collaborator_id, limit=20)
 
-    # Find the 'thinking' trace from the heartbeat
-    thinking_traces = [t for t in traces if t["trace_type"] == "thinking"]
+    # Single-pass loop archives 'message' traces (user + assistant), not separate 'thinking'
+    message_traces = [t for t in traces if t["trace_type"] == "message"]
 
     assistant_responses = []
     for t in traces:
@@ -53,12 +53,12 @@ async def test_heartbeat_proactive_insight_flow(duckdb_storage):
             if meta.get("role") == "assistant":
                 assistant_responses.append(t)
 
-    assert len(thinking_traces) > 0, "No thinking trace found for heartbeat!"
+    assert len(message_traces) > 0, "No message trace found for heartbeat!"
     assert any("completed the proactive scan" in t["content"] for t in assistant_responses), (
         "No insight message found in L3!"
     )
 
-    print("\n[QA] Heartbeat E2E Flow Test Passed: Pulse -> Thinking -> Insight -> L3 Archive.")
+    print("\n[QA] Heartbeat E2E Flow Test Passed: Pulse -> Response -> L3 Archive.")
 
 
 if __name__ == "__main__":

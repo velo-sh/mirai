@@ -1,7 +1,8 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+
 from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.memory import MemorizeTool
@@ -19,6 +20,7 @@ async def test_memory_isolation_between_collaborators(tmp_path):
 
     # Use isolated vector db
     from mirai.memory.vector_db import VectorStore
+
     isolated_l2 = VectorStore(db_path=str(tmp_path / "vectors"))
 
     # 1. Setup two distinct collaborators
@@ -39,25 +41,39 @@ async def test_memory_isolation_between_collaborators(tmp_path):
 
     # 2. Alice stores a secret memory
     provider = MockProvider()
+
+    # Use mock L3 storage to avoid DuckDB file lock contention
+    mock_l3 = AsyncMock()
+    mock_l3.append_trace = AsyncMock()
+    mock_l3.get_traces_by_ids = AsyncMock(return_value=[])
+
+    mock_embedder = AsyncMock()
+    mock_embedder.get_embeddings = AsyncMock(return_value=[0.1] * 1536)
+
     alice_agent = await AgentLoop.create(
-        provider=provider, 
-        tools=[MemorizeTool(collaborator_id=collab_a_id, vector_store=isolated_l2)], 
+        provider=provider,
+        tools=[MemorizeTool(collaborator_id=collab_a_id, vector_store=isolated_l2, l3_storage=mock_l3)],
         collaborator_id=collab_a_id,
-        l2_storage=isolated_l2  # Share same physical DB but different query context
+        l3_storage=mock_l3,
+        l2_storage=isolated_l2,
+        embedder=mock_embedder,
     )
 
     # Alice memorizes something
     await alice_agent.run("Alice's secret is: WonderLand.")
-    
+
     import asyncio
-    await asyncio.sleep(1) # Allow DB flush
+
+    await asyncio.sleep(1)  # Allow DB flush
 
     # 3. Bob tries to retrieve it
     bob_agent = await AgentLoop.create(
-        provider=provider, 
-        tools=[MemorizeTool(collaborator_id=collab_b_id, vector_store=isolated_l2)], 
+        provider=provider,
+        tools=[MemorizeTool(collaborator_id=collab_b_id, vector_store=isolated_l2, l3_storage=mock_l3)],
         collaborator_id=collab_b_id,
-        l2_storage=isolated_l2
+        l3_storage=mock_l3,
+        l2_storage=isolated_l2,
+        embedder=mock_embedder,
     )
 
     # Bob asks for the secret
@@ -74,18 +90,18 @@ async def test_memory_isolation_between_collaborators(tmp_path):
         assert "WonderLand" not in mem["content"], f"Data Leak! Bob found Alice's secret: {mem['content']}"
 
     # Now check Alice's results (she should see it)
-    
+
     # Direct check on isolated_l2
-    direct_search = await isolated_l2.search(
-        vector=[0.1]*1536, # MockEmbedder default
-        limit=10
+    await isolated_l2.search(
+        vector=[0.1] * 1536,  # MockEmbedder default
+        limit=10,
     )
-    
+
     query_vector_alice = await alice_agent.embedder.get_embeddings("secret")
     alice_memories = await alice_agent.l2_storage.search(
         vector=query_vector_alice, limit=5, filter=f"collaborator_id = '{collab_a_id}'"
     )
-    
+
     assert any("WonderLand" in m["content"] for m in alice_memories), "Alice couldn't find her own secret!"
 
     print("\n[QA] Memory Isolation Test Passed: Alice and Bob have separate cognitive spaces.")

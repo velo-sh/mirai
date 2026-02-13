@@ -1,2 +1,0 @@
-test_mira_tool - created at 2025-02-13
-This is a test file to verify editor_tool is working correctly.
