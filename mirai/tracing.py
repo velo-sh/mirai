@@ -53,6 +53,32 @@ def setup_tracing(service_name: str = "mirai", console: bool = False) -> None:
     _tracer = trace.get_tracer(service_name)
 
 
+# Suppress the harmless "Failed to detach context" error that occurs
+# when async frameworks (granian, uvloop) dispatch callbacks in different
+# contextvars.Context copies, causing ContextVar.reset() to fail.
+# See: https://github.com/open-telemetry/opentelemetry-python/issues/2606
+#
+# We patch _RUNTIME_CONTEXT.detach at the lowest level, because the
+# module-level detach() function catches exceptions and logs them via
+# logger.exception(), producing noisy tracebacks even though the error
+# is harmless.
+def _install_context_detach_fix():
+    from opentelemetry.context import _RUNTIME_CONTEXT
+
+    _original = _RUNTIME_CONTEXT.__class__.detach
+
+    def _safe_detach(self, token):
+        try:
+            _original(self, token)
+        except ValueError:
+            pass
+
+    _RUNTIME_CONTEXT.__class__.detach = _safe_detach
+
+
+_install_context_detach_fix()
+
+
 def get_tracer() -> trace.Tracer:
     """Return the configured tracer (or a no-op tracer if not initialized)."""
     return _tracer or trace.get_tracer("mirai")
