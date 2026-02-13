@@ -37,6 +37,7 @@ _MUTABLE_KEYS: set[tuple[str, str]] = {
     ("llm", "default_model"),
     ("llm", "max_tokens"),
     ("server", "log_level"),
+    ("registry", "refresh_interval"),
 }
 
 _CONFIG_PATH = Path.home() / ".mirai" / "config.toml"

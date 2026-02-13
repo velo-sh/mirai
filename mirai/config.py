@@ -85,6 +85,12 @@ class AgentConfig(BaseModel):
     collaborator_id: str = "01AN4Z048W7N7DF3SQ5G16CYAJ"
 
 
+class RegistryConfig(BaseModel):
+    """Model registry configuration."""
+
+    refresh_interval: int = 300  # seconds between registry refreshes
+
+
 class TomlSource(PydanticBaseSettingsSource):
     """Custom settings source to load from TOML file using standard lib (py3.11+)."""
 
@@ -138,6 +144,7 @@ class MiraiConfig(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    registry: RegistryConfig = Field(default_factory=RegistryConfig)
 
     @classmethod
     def settings_customise_sources(
