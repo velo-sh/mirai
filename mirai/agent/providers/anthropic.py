@@ -30,9 +30,48 @@ class AnthropicProvider:
     """
 
     MODEL_CATALOG = [
-        ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4", context_window=200_000, max_tokens=8192),
-        ModelInfo(id="claude-opus-4-20250514", name="Claude Opus 4", context_window=200_000, max_tokens=8192, reasoning=True),
-        ModelInfo(id="claude-haiku-3-5-20241022", name="Claude Haiku 3.5", context_window=200_000, max_tokens=4096),
+        ModelInfo(
+            id="claude-sonnet-4-20250514",
+            name="Claude Sonnet 4",
+            description="Best balance of intelligence and speed for high-throughput tasks",
+            context_window=200_000,
+            max_output_tokens=8192,
+            supports_tool_use=True,
+            supports_vision=True,
+            supports_json_mode=True,
+            input_modalities=["text", "image"],
+            input_price=3.0,
+            output_price=15.0,
+            knowledge_cutoff="2025-03",
+        ),
+        ModelInfo(
+            id="claude-opus-4-20250514",
+            name="Claude Opus 4",
+            description="Highest capability model for complex reasoning and analysis",
+            context_window=200_000,
+            max_output_tokens=8192,
+            reasoning=True,
+            supports_tool_use=True,
+            supports_vision=True,
+            supports_json_mode=True,
+            input_modalities=["text", "image"],
+            input_price=15.0,
+            output_price=75.0,
+            knowledge_cutoff="2025-03",
+        ),
+        ModelInfo(
+            id="claude-haiku-3-5-20241022",
+            name="Claude Haiku 3.5",
+            description="Fast, affordable model for lightweight tasks",
+            context_window=200_000,
+            max_output_tokens=4096,
+            supports_tool_use=True,
+            supports_vision=True,
+            input_modalities=["text", "image"],
+            input_price=0.80,
+            output_price=4.0,
+            knowledge_cutoff="2024-07",
+        ),
     ]
 
     def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):

@@ -19,14 +19,44 @@ from mirai.agent.models import ProviderResponse
 # ---------------------------------------------------------------------------
 @dataclass
 class ModelInfo:
-    """Metadata for an available model."""
+    """Metadata for an available model.
+
+    Fields follow industry conventions (LiteLLM, OpenRouter):
+      - Identity:     id, name, description
+      - Limits:       context_window, max_output_tokens
+      - Capabilities: reasoning, supports_tool_use, supports_streaming,
+                      supports_json_mode, supports_vision
+      - Modalities:   input_modalities, output_modalities
+      - Pricing:      input_price, output_price (USD per 1M tokens)
+      - Lifecycle:    knowledge_cutoff, deprecation_date
+    """
 
     id: str
     name: str
+    description: str | None = None
+
+    # --- Limits ---
     context_window: int | None = None
-    max_tokens: int | None = None
+    max_output_tokens: int | None = None
+
+    # --- Capabilities ---
     reasoning: bool = False
+    supports_tool_use: bool = True
+    supports_streaming: bool = True
+    supports_json_mode: bool = False
+    supports_vision: bool = False
+
+    # --- Modalities ---
     input_modalities: list[str] = field(default_factory=lambda: ["text"])
+    output_modalities: list[str] = field(default_factory=lambda: ["text"])
+
+    # --- Pricing (USD per 1 million tokens) ---
+    input_price: float | None = None
+    output_price: float | None = None
+
+    # --- Lifecycle ---
+    knowledge_cutoff: str | None = None   # e.g. "2025-03"
+    deprecation_date: str | None = None   # ISO-8601 date
 
 
 @dataclass

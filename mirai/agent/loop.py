@@ -199,10 +199,27 @@ class AgentLoop:
                 for trace in raw_traces:
                     memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
 
-        # Sandwich pattern: identity → context → memories → reinforcement → rules
+        # Build model catalog section so the agent knows its own capabilities
+        model_catalog = ""
+        if hasattr(self.provider, 'MODEL_CATALOG'):
+            provider_name = getattr(self.provider, 'provider_name', 'unknown')
+            current_model = getattr(self.provider, 'model', 'unknown')
+            lines = [f"Provider: {provider_name}", f"Current model: {current_model}", "Available models:"]
+            for m in self.provider.MODEL_CATALOG:
+                desc = f"  - **{m.id}**: {m.description}"
+                if m.reasoning:
+                    desc += " (reasoning)"
+                if m.supports_vision:
+                    desc += " (vision)"
+                lines.append(desc)
+            model_catalog = "\n".join(lines)
+
+        # Sandwich pattern: identity → context → memories → models → reinforcement → rules
         prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
         if memory_context:
             prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
+        if model_catalog:
+            prompt += f"\n\n# RUNTIME INFO\n{model_catalog}"
         prompt += (
             "\n\n# IDENTITY REINFORCEMENT\n"
             "Remember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently.\n\n"
@@ -234,13 +251,15 @@ class AgentLoop:
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[CycleEvent, None]:
-        """Core Think → Act → Critique cycle as an async generator.
+        """Single-pass agent loop — system + tools + message → response.
+
+        No multi-phase orchestration. The model receives the system prompt,
+        tool definitions, and user message, then responds naturally — using
+        tools when it decides to, producing a final text response when done.
 
         Yields:
-            ThinkingStep  — after Phase 1 completes
-            ToolCallStep  — for each tool invocation in Phase 2
-            DraftStep     — after Phase 2 produces a textual response
-            RefinedStep   — after Phase 3 critique produces the final text
+            ToolCallStep  — for each tool invocation
+            RefinedStep   — final text response
         """
         tracer = get_tracer()
 
@@ -271,41 +290,11 @@ class AgentLoop:
             messages.append({"role": "user", "content": message})
             tool_definitions = [tool.definition for tool in self.tools.values()]
 
-            # ---- Phase 1: Thinking ----
-            log.info("phase_thinking", collaborator=self.collaborator_id)
-            monologue_prompt = (
-                "Analyze the user message and plan your response. Use <thinking>...</thinking> tags for your private "
-                "internal thoughts. DO NOT output the final response yet. Just strategy and tool choice."
-            )
-            temp_messages = messages + [{"role": "user", "content": monologue_prompt}]
-
-            with tracer.start_as_current_span("agent.think"):
-                think_response: ProviderResponse = await self.provider.generate_response(
-                    model=model, system=full_system_prompt, messages=temp_messages, tools=[]
-                )
-
-            monologue_text = think_response.text()
-            await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
-            yield ThinkingStep(monologue=monologue_text)
-
-            # Inject thinking into conversation so Phase 2 follows through
-            monologue_wrapped = monologue_text
-            if "<thinking>" not in monologue_text:
-                monologue_wrapped = f"<thinking>\n{monologue_text}\n</thinking>"
-            messages.append({"role": "assistant", "content": monologue_wrapped})
-
-            # Nudge the model to execute now
-            messages.append({
-                "role": "user",
-                "content": (
-                    "Now execute your plan. If you need data, invoke the appropriate tool "
-                    "via a function call. Then provide your final response to the user."
-                ),
-            })
-
-            # ---- Phase 2: Action Loop ----
+            # ---- Single-pass tool loop ----
             MAX_TOOL_ROUNDS = 10
             tool_round = 0
+            final_text = ""
+
             while True:
                 tool_round += 1
                 if tool_round > MAX_TOOL_ROUNDS:
@@ -314,21 +303,22 @@ class AgentLoop:
 
                 with tracer.start_as_current_span("agent.act"):
                     log.info(
-                        "phase2_request",
+                        "llm_request",
                         tools_count=len(tool_definitions),
                         tool_names=[t["name"] for t in tool_definitions],
+                        round=tool_round,
                     )
                     response: ProviderResponse = await self.provider.generate_response(
                         model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
                     )
                     log.info(
-                        "phase2_response",
+                        "llm_response",
                         stop_reason=response.stop_reason,
                         content_blocks=len(response.content),
                         block_types=[type(b).__name__ for b in response.content],
                     )
 
-                # Parse assistant response — build OpenAI-format message
+                # Parse assistant response
                 text_parts: list[str] = []
                 tool_calls: list[ToolUseBlock] = []
 
@@ -352,7 +342,6 @@ class AgentLoop:
                                 "arguments": json.dumps(tc.input),
                             },
                         }
-                        # Preserve Gemini 3 thought_signature for round-trip
                         if getattr(tc, "thought_signature", None):
                             tc_dict["thought_signature"] = tc.thought_signature
                         tc_list.append(tc_dict)
@@ -371,65 +360,30 @@ class AgentLoop:
                         await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
                         yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
 
-                        # Tool result in OpenAI format: role="tool" with tool_call_id
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "content": result,
                         })
                 else:
+                    # Model produced a final text response — done
+                    final_text = "".join(text_parts)
                     break
 
-            # Extract draft text from the last assistant message
-            final_text = ""
-            for msg in reversed(messages):
-                if msg.get("role") == "assistant":
-                    content = msg.get("content")
-                    if isinstance(content, str):
-                        final_text = content
-                    elif content is None:
-                        final_text = ""
-                    break
+            # Fallback if loop ended without text
+            if not final_text:
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content")
+                        if isinstance(content, str) and content.strip():
+                            final_text = content
+                            break
+            if not final_text:
+                final_text = "I acknowledge your message."
 
-            yield DraftStep(text=final_text)
+            await self._archive_trace(final_text, "message", {"role": "assistant"})
+            yield RefinedStep(text=final_text, draft=final_text)
 
-            # ---- Phase 3: Critique ----
-            log.info("phase_critique_start", draft_length=len(final_text))
-
-            critique_prompt = (
-                f"Review your draft response below and refine it if needed.\n\n"
-                f'Draft: "{final_text}"\n\n'
-                f"Rules:\n"
-                f"- Check alignment with your SOUL.md identity and behavioral constraints.\n"
-                f"- Output ONLY the final polished response — no critique, no analysis, no meta-commentary.\n"
-                f"- If the draft is already perfect, output it exactly as-is."
-            )
-
-            critique_messages = messages + [{"role": "user", "content": critique_prompt}]
-            with tracer.start_as_current_span("agent.critique"):
-                refined_response: ProviderResponse = await self.provider.generate_response(
-                    model=model, system=full_system_prompt, messages=critique_messages, tools=[]
-                )
-
-            refined_text = refined_response.text().strip()
-            log.info("phase_critique_done", refined_length=len(refined_text))
-
-            # Fallback cascade: critique → draft → monologue → default
-            if not refined_text:
-                if final_text:
-                    log.warning("critique_returned_empty", fallback="using_final_text")
-                    refined_text = final_text
-                else:
-                    log.error("agent_run_produced_no_text", fallback="salvaging_from_thinking")
-                    salvaged = re.sub(
-                        r"<thinking>.*?</thinking>", "", monologue_text, flags=re.DOTALL
-                    ).strip()
-                    if not salvaged and monologue_text:
-                        salvaged = monologue_text.replace("<thinking>", "").replace("</thinking>", "").strip()
-                    refined_text = salvaged or "I acknowledge your message. (Personality online)"
-
-            await self._archive_trace(refined_text, "message", {"role": "assistant"})
-            yield RefinedStep(text=refined_text, draft=final_text)
 
 
     # ------------------------------------------------------------------
