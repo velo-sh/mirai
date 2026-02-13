@@ -130,7 +130,17 @@ class AntigravityProvider:
         from mirai.agent.providers.base import ModelInfo
 
         return [
-            ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4 (Antigravity)", context_window=200_000, max_tokens=8192),
+            ModelInfo(
+                id="claude-sonnet-4-20250514",
+                name="Claude Sonnet 4 (Antigravity)",
+                description="Claude Sonnet 4 via Google Cloud Code Assist",
+                context_window=200_000,
+                max_output_tokens=8192,
+                supports_tool_use=True,
+                supports_vision=True,
+                input_modalities=["text", "image"],
+                knowledge_cutoff="2025-03",
+            ),
         ]
 
     async def get_usage(self) -> "UsageSnapshot":

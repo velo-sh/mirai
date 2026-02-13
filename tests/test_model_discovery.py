@@ -59,24 +59,50 @@ class TestModelInfo:
         m = ModelInfo(id="gpt-4o", name="GPT-4o")
         assert m.id == "gpt-4o"
         assert m.name == "GPT-4o"
+        assert m.description is None
         assert m.context_window is None
-        assert m.max_tokens is None
+        assert m.max_output_tokens is None
         assert m.reasoning is False
         assert m.input_modalities == ["text"]
+        assert m.output_modalities == ["text"]
+
+    def test_minimal_defaults_for_capabilities(self):
+        m = ModelInfo(id="x", name="X")
+        assert m.supports_tool_use is True
+        assert m.supports_streaming is True
+        assert m.supports_json_mode is False
+        assert m.supports_vision is False
+
+    def test_minimal_defaults_for_pricing_and_lifecycle(self):
+        m = ModelInfo(id="x", name="X")
+        assert m.input_price is None
+        assert m.output_price is None
+        assert m.knowledge_cutoff is None
+        assert m.deprecation_date is None
 
     def test_full_construction(self):
         m = ModelInfo(
             id="MiniMax-M2.5",
             name="MiniMax M2.5",
+            description="Advanced reasoning model",
             context_window=200_000,
-            max_tokens=8192,
+            max_output_tokens=8192,
             reasoning=True,
+            supports_tool_use=True,
+            supports_vision=True,
+            supports_json_mode=True,
             input_modalities=["text", "image"],
+            input_price=1.1,
+            output_price=4.4,
+            knowledge_cutoff="2025-06",
         )
         assert m.context_window == 200_000
-        assert m.max_tokens == 8192
+        assert m.max_output_tokens == 8192
         assert m.reasoning is True
-        assert m.input_modalities == ["text", "image"]
+        assert m.description == "Advanced reasoning model"
+        assert m.supports_vision is True
+        assert m.input_price == 1.1
+        assert m.knowledge_cutoff == "2025-06"
 
     def test_asdict_serialisation(self):
         m = ModelInfo(id="test", name="Test Model")
@@ -84,6 +110,9 @@ class TestModelInfo:
         assert isinstance(d, dict)
         assert d["id"] == "test"
         assert d["input_modalities"] == ["text"]
+        assert d["output_modalities"] == ["text"]
+        assert "supports_tool_use" in d
+        assert "input_price" in d
 
     def test_default_modalities_are_independent(self):
         """Each instance should get its own list (mutable default gotcha)."""
@@ -91,6 +120,12 @@ class TestModelInfo:
         m2 = ModelInfo(id="b", name="B")
         m1.input_modalities.append("image")
         assert "image" not in m2.input_modalities
+
+    def test_output_modalities_are_independent(self):
+        m1 = ModelInfo(id="a", name="A")
+        m2 = ModelInfo(id="b", name="B")
+        m1.output_modalities.append("image")
+        assert "image" not in m2.output_modalities
 
     def test_equality(self):
         m1 = ModelInfo(id="x", name="X", context_window=100)
@@ -223,6 +258,28 @@ class TestListModels:
         models = await minimax_provider.list_models()
         vl = [m for m in models if m.id == "MiniMax-VL-01"][0]
         assert "image" in vl.input_modalities
+        assert vl.supports_vision is True
+
+    @pytest.mark.asyncio
+    async def test_minimax_models_have_descriptions(self, minimax_provider):
+        models = await minimax_provider.list_models()
+        for m in models:
+            assert m.description is not None
+            assert len(m.description) > 0
+
+    @pytest.mark.asyncio
+    async def test_minimax_models_have_pricing(self, minimax_provider):
+        models = await minimax_provider.list_models()
+        for m in models:
+            assert m.input_price is not None
+            assert m.output_price is not None
+            assert m.input_price > 0
+
+    @pytest.mark.asyncio
+    async def test_minimax_models_have_knowledge_cutoff(self, minimax_provider):
+        models = await minimax_provider.list_models()
+        for m in models:
+            assert m.knowledge_cutoff is not None
 
     @pytest.mark.asyncio
     async def test_minimax_m25_is_reasoning(self, minimax_provider):
@@ -242,6 +299,20 @@ class TestListModels:
         assert len(models) >= 3
         ids = {m.id for m in models}
         assert "claude-sonnet-4-20250514" in ids
+
+    @pytest.mark.asyncio
+    async def test_anthropic_models_have_vision(self, anthropic_provider):
+        models = await anthropic_provider.list_models()
+        for m in models:
+            assert m.supports_vision is True
+            assert "image" in m.input_modalities
+
+    @pytest.mark.asyncio
+    async def test_anthropic_models_have_pricing(self, anthropic_provider):
+        models = await anthropic_provider.list_models()
+        for m in models:
+            assert m.input_price is not None
+            assert m.output_price is not None
 
     @pytest.mark.asyncio
     async def test_openai_with_catalog_returns_catalog(self):
@@ -400,14 +471,26 @@ class TestMiniMaxGetUsage:
         return MiniMaxProvider(api_key="test-key")
 
     @pytest.mark.asyncio
-    async def test_successful_usage_with_used_total(self):
-        """Standard response with used/total should compute used_percent."""
+    async def test_successful_usage_with_model_remains(self):
+        """Real MiniMax response uses model_remains array.
+
+        current_interval_usage_count is the REMAINING count.
+        """
         provider = self._make_provider()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
-            "base_resp": {"status_code": 0},
-            "data": {"used": 30, "total": 100, "plan": "pro"},
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+            "model_remains": [
+                {
+                    "start_time": 1770984000000,
+                    "end_time": 1770998400000,
+                    "remains_time": 11128818,
+                    "current_interval_total_count": 1500,
+                    "current_interval_usage_count": 1200,  # 1200 remaining
+                    "model_name": "MiniMax-M2",
+                }
+            ],
         }
 
         with patch("httpx.AsyncClient") as mock_client_cls:
@@ -420,8 +503,10 @@ class TestMiniMaxGetUsage:
             usage = await provider.get_usage()
 
         assert usage.provider == "minimax"
-        assert usage.used_percent == 30.0
-        assert usage.plan == "pro"
+        # consumed = 1500 - 1200 = 300, used_pct = 300/1500 * 100 = 20.0
+        assert usage.used_percent == 20.0
+        assert usage.plan == "MiniMax-M2"
+        assert usage.reset_at is not None
         assert usage.error is None
 
     @pytest.mark.asyncio
@@ -677,8 +762,19 @@ class TestMiniMaxDefaults:
             assert m.context_window is not None
             assert m.context_window > 0
 
-    def test_all_catalog_models_have_max_tokens(self):
+    def test_all_catalog_models_have_max_output_tokens(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
         for m in MiniMaxProvider.MODEL_CATALOG:
-            assert m.max_tokens is not None
-            assert m.max_tokens > 0
+            assert m.max_output_tokens is not None
+            assert m.max_output_tokens > 0
+
+    def test_all_catalog_models_have_description(self):
+        from mirai.agent.providers.minimax import MiniMaxProvider
+        for m in MiniMaxProvider.MODEL_CATALOG:
+            assert m.description is not None
+
+    def test_all_catalog_models_have_pricing(self):
+        from mirai.agent.providers.minimax import MiniMaxProvider
+        for m in MiniMaxProvider.MODEL_CATALOG:
+            assert m.input_price is not None
+            assert m.output_price is not None
