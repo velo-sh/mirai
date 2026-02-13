@@ -24,6 +24,7 @@ from typing import Any
 
 import orjson
 
+from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.logging import get_logger
 
@@ -69,7 +70,7 @@ class SystemTool(BaseTool):
         self,
         config: Any | None = None,
         start_time: float | None = None,
-        provider: Any | None = None,
+        provider: ProviderProtocol | None = None,
         registry: Any | None = None,
         agent_loop: Any | None = None,
     ):
@@ -188,6 +189,7 @@ class SystemTool(BaseTool):
         # 3. Create new provider via factory
         try:
             from mirai.agent.providers.factory import create_provider
+
             new_provider = create_provider(provider=provider_name, model=model)
         except Exception as exc:
             log.error("model_switch_failed", model=model, provider=provider_name, error=str(exc))
@@ -208,6 +210,7 @@ class SystemTool(BaseTool):
             f"✅ Switched to **{model}** (provider: {provider_name}).\n"
             "This takes effect starting with my next response."
         )
+
     # ------------------------------------------------------------------
     # Action: status
     # ------------------------------------------------------------------

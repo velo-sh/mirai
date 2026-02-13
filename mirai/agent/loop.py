@@ -9,18 +9,19 @@ Prompt construction lives in :mod:`mirai.agent.prompt`.
 """
 
 import json
-import re
 from collections.abc import AsyncGenerator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import orjson
 from ulid import ULID
 
-from mirai.agent.identity import initialize_collaborator, load_soul, update_soul as _update_soul_fn
+from mirai.agent.identity import initialize_collaborator, load_soul
+from mirai.agent.identity import update_soul as _update_soul_fn
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.prompt import build_system_prompt
 from mirai.agent.providers import MockEmbeddingProvider
+from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
 from mirai.logging import get_logger
@@ -34,15 +35,18 @@ log = get_logger("mirai.agent")
 # Cycle step events emitted by _execute_cycle
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ThinkingStep:
     """Phase 1 completed — monologue text available."""
+
     monologue: str
 
 
 @dataclass
 class ToolCallStep:
     """A tool was invoked during Phase 2."""
+
     name: str
     input: dict[str, Any]
     result: str
@@ -51,12 +55,14 @@ class ToolCallStep:
 @dataclass
 class DraftStep:
     """Phase 2 completed — a draft response is available (pre-critique)."""
+
     text: str
 
 
 @dataclass
 class RefinedStep:
     """Phase 3 completed — the final refined text is available."""
+
     text: str
     draft: str = ""  # the pre-critique draft, for reference
 
@@ -71,7 +77,7 @@ _load_soul = load_soul
 class AgentLoop:
     def __init__(
         self,
-        provider: Any,
+        provider: ProviderProtocol,
         tools: Sequence[BaseTool],
         collaborator_id: str,
         l3_storage: DuckDBStorage | None = None,
@@ -81,22 +87,21 @@ class AgentLoop:
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
         self.collaborator_id = collaborator_id
-        
+
         # Dependency Injection with fallbacks
         self.l3_storage = l3_storage or DuckDBStorage()
         self.l2_storage = l2_storage or VectorStore()
         self.embedder = embedder or MockEmbeddingProvider()
 
-    def swap_provider(self, new_provider: Any) -> None:
+    def swap_provider(self, new_provider: ProviderProtocol) -> None:
         """Hot-swap the LLM provider at runtime.
 
         Takes effect on the next ``generate_response()`` call.
         """
-        old_name = getattr(self.provider, 'provider_name', 'unknown')
-        new_name = getattr(new_provider, 'provider_name', 'unknown')
+        old_name = getattr(self.provider, "provider_name", "unknown")
+        new_name = getattr(new_provider, "provider_name", "unknown")
         self.provider = new_provider
-        log.info("provider_swapped", old=old_name, new=new_name,
-                 model=getattr(new_provider, 'model', 'unknown'))
+        log.info("provider_swapped", old=old_name, new=new_name, model=getattr(new_provider, "model", "unknown"))
 
         # Identity attributes (to be loaded)
         self.name = ""
@@ -107,7 +112,7 @@ class AgentLoop:
     @classmethod
     async def create(
         cls,
-        provider: Any,
+        provider: ProviderProtocol,
         tools: Sequence[BaseTool],
         collaborator_id: str,
         l3_storage: DuckDBStorage | None = None,
@@ -116,12 +121,7 @@ class AgentLoop:
     ):
         """Factory method to create and initialize an AgentLoop instance."""
         instance = cls(
-            provider, 
-            tools, 
-            collaborator_id, 
-            l3_storage=l3_storage, 
-            l2_storage=l2_storage, 
-            embedder=embedder
+            provider, tools, collaborator_id, l3_storage=l3_storage, l2_storage=l2_storage, embedder=embedder
         )
         await instance._initialize()
         return instance
@@ -295,11 +295,13 @@ class AgentLoop:
                         await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
                         yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result,
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": result,
+                            }
+                        )
                 else:
                     # Model produced a final text response — done
                     final_text = "".join(text_parts)
@@ -318,8 +320,6 @@ class AgentLoop:
 
             await self._archive_trace(final_text, "message", {"role": "assistant"})
             yield RefinedStep(text=final_text, draft=final_text)
-
-
 
     # ------------------------------------------------------------------
     # Public API
