@@ -49,7 +49,19 @@ def create_provider(
             log.info("provider_initialized", provider="anthropic", model=model)
             return AnthropicProvider(api_key=key, model=model)
 
-    if provider == "openai" or provider not in ("antigravity", "anthropic"):
+    if provider == "minimax":
+        from mirai.agent.providers.minimax import MiniMaxProvider
+
+        key = api_key or os.getenv("MINIMAX_API_KEY")
+        if not key:
+            raise ValueError(
+                "MiniMax provider requires an API key. "
+                "Set api_key in config or MINIMAX_API_KEY environment variable."
+            )
+        log.info("provider_initialized", provider="minimax", model=model, base_url=base_url)
+        return MiniMaxProvider(api_key=key, model=model, base_url=base_url)
+
+    if provider == "openai" or provider not in ("antigravity", "anthropic", "minimax"):
         from mirai.agent.providers.openai import OpenAIProvider
 
         key = api_key or os.getenv("OPENAI_API_KEY")
