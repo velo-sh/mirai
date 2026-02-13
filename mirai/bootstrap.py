@@ -118,7 +118,7 @@ class MiraiApp:
 
             # Start model registry background refresh
             asyncio.get_running_loop().create_task(
-                registry_refresh_loop(self.registry)
+                registry_refresh_loop(self.registry, interval=config.registry.refresh_interval)
             )
 
         except Exception as e:
