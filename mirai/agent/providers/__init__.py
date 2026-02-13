@@ -1,7 +1,8 @@
 """
 LLM Provider implementations for Mirai.
 
-Supports Anthropic direct API and Google Cloud Code Assist (Antigravity) routing.
+Supports OpenAI-compatible (base), Anthropic, and Google Cloud Code Assist
+(Antigravity) routing. Internal message format is OpenAI Chat Completions.
 """
 
 from mirai.agent.providers.anthropic import AnthropicProvider
@@ -9,12 +10,14 @@ from mirai.agent.providers.antigravity import AntigravityProvider, _RetryableAPI
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.providers.embeddings import MockEmbeddingProvider
 from mirai.agent.providers.factory import create_provider
+from mirai.agent.providers.openai import OpenAIProvider
 from mirai.agent.providers.quota import QuotaManager
 
 __all__ = [
     "AnthropicProvider",
     "AntigravityProvider",
     "MockEmbeddingProvider",
+    "OpenAIProvider",
     "ProviderProtocol",
     "QuotaManager",
     "_RetryableAPIError",

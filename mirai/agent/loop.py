@@ -6,6 +6,7 @@ and identity-anchored system prompts.
 """
 
 import functools
+import json
 import os
 import re
 import shutil
@@ -327,18 +328,36 @@ class AgentLoop:
                         block_types=[type(b).__name__ for b in response.content],
                     )
 
-                # Parse assistant response
-                assistant_content: list[dict[str, Any]] = []
+                # Parse assistant response — build OpenAI-format message
+                text_parts: list[str] = []
                 tool_calls: list[ToolUseBlock] = []
 
                 for block in response.content:
-                    if isinstance(block, TextBlock):
-                        assistant_content.append({"type": "text", "text": block.text})
+                    if isinstance(block, TextBlock) and block.text:
+                        text_parts.append(block.text)
                     elif isinstance(block, ToolUseBlock):
                         tool_calls.append(block)
-                        assistant_content.append(block.model_dump())
 
-                messages.append({"role": "assistant", "content": assistant_content})
+                # Build the assistant message in OpenAI format
+                assistant_msg: dict[str, Any] = {"role": "assistant"}
+                assistant_msg["content"] = "".join(text_parts) if text_parts else None
+                if tool_calls:
+                    tc_list = []
+                    for tc in tool_calls:
+                        tc_dict: dict[str, Any] = {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.input),
+                            },
+                        }
+                        # Preserve Gemini 3 thought_signature for round-trip
+                        if getattr(tc, "thought_signature", None):
+                            tc_dict["thought_signature"] = tc.thought_signature
+                        tc_list.append(tc_dict)
+                    assistant_msg["tool_calls"] = tc_list
+                messages.append(assistant_msg)
 
                 # Execute tools if present
                 if response.stop_reason == "tool_use" or tool_calls:
@@ -352,11 +371,11 @@ class AgentLoop:
                         await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
                         yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
 
+                        # Tool result in OpenAI format: role="tool" with tool_call_id
                         messages.append({
-                            "role": "user",
-                            "content": [
-                                {"type": "tool_result", "tool_use_id": tool_call.id, "content": result}
-                            ],
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result,
                         })
                 else:
                     break
@@ -365,13 +384,11 @@ class AgentLoop:
             final_text = ""
             for msg in reversed(messages):
                 if msg.get("role") == "assistant":
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        final_text = "".join(
-                            c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"
-                        )
-                    elif isinstance(content, str):
+                    content = msg.get("content")
+                    if isinstance(content, str):
                         final_text = content
+                    elif content is None:
+                        final_text = ""
                     break
 
             yield DraftStep(text=final_text)

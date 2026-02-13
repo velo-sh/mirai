@@ -20,7 +20,10 @@ class MockEmbeddingProvider:
 
 
 class MockProvider:
-    """Mock provider to test the AgentLoop logic without an API key."""
+    """Mock provider to test the AgentLoop logic without an API key.
+
+    Accepts messages in OpenAI format (the internal canonical format).
+    """
 
     def __init__(self) -> None:
         self.call_count = 0
@@ -44,7 +47,7 @@ class MockProvider:
                 [c.get("text", "") for c in last_content if isinstance(c, dict) and c.get("type") == "text"]
             )
         else:
-            last_text = str(last_content)
+            last_text = str(last_content) if last_content else ""
 
         # Extract text from all messages to find the user's original intent
         full_history_text = ""
@@ -54,7 +57,7 @@ class MockProvider:
                 full_history_text += " ".join(
                     [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
                 )
-            else:
+            elif content:
                 full_history_text += str(content)
 
         # 1. Thinking Turn
@@ -83,12 +86,7 @@ class MockProvider:
         if tools:
             # 1. Executive Multi-Step Workflow (soul_summary)
             if "soul_summary" in full_history_text.lower() or "find the soul file" in full_history_text.lower():
-                shell_results = [
-                    m
-                    for m in messages
-                    if m.get("role") == "user"
-                    and any("tool_result" in str(c) and "find_soul_call" in str(c) for c in (m.get("content") or []))
-                ]
+                shell_results = self._find_tool_results(messages, "find_soul_call")
                 if not shell_results:
                     return ProviderResponse(
                         content=[
@@ -102,14 +100,7 @@ class MockProvider:
                         stop_reason="tool_use",
                     )
 
-                editor_results = [
-                    m
-                    for m in messages
-                    if m.get("role") == "user"
-                    and any(
-                        "tool_result" in str(c) and "write_summary_call" in str(c) for c in (m.get("content") or [])
-                    )
-                ]
+                editor_results = self._find_tool_results(messages, "write_summary_call")
                 if not editor_results:
                     return ProviderResponse(
                         content=[
@@ -129,12 +120,7 @@ class MockProvider:
 
             # 2. E2E Proactive Maintenance Workflow
             if "maintenance_check" in full_history_text.lower():
-                maint_shell_results = [
-                    m
-                    for m in messages
-                    if m.get("role") == "user"
-                    and any("tool_result" in str(c) and "call_shell_maint" in str(c) for c in (m.get("content") or []))
-                ]
+                maint_shell_results = self._find_tool_results(messages, "call_shell_maint")
 
                 if not maint_shell_results:
                     return ProviderResponse(
@@ -149,12 +135,7 @@ class MockProvider:
                         stop_reason="tool_use",
                     )
 
-                maint_editor_results = [
-                    m
-                    for m in messages
-                    if m.get("role") == "user"
-                    and any("tool_result" in str(c) and "call_edit_maint" in str(c) for c in (m.get("content") or []))
-                ]
+                maint_editor_results = self._find_tool_results(messages, "call_edit_maint")
 
                 if not maint_editor_results:
                     return ProviderResponse(
@@ -187,17 +168,7 @@ class MockProvider:
 
             # 4. Memory Isolation Test
             if "wonderland" in full_history_text.lower():
-                has_memorized = False
-                for m in messages:
-                    if m.get("role") == "assistant":
-                        c_list = m.get("content")
-                        if isinstance(c_list, list):
-                            for c in c_list:
-                                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "memorize":
-                                    has_memorized = True
-                                    break
-                    if has_memorized:
-                        break
+                has_memorized = self._has_tool_call(messages, "memorize")
 
                 if not has_memorized:
                     return ProviderResponse(
@@ -222,3 +193,34 @@ class MockProvider:
             stop_reason="end_turn",
             model_id=self.model,
         )
+
+    # ------------------------------------------------------------------
+    # Helpers for OpenAI-format message inspection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_tool_results(messages: list[dict[str, Any]], tool_call_id: str) -> list[dict[str, Any]]:
+        """Find tool result messages for a specific tool_call_id.
+
+        In OpenAI format, tool results are: {"role": "tool", "tool_call_id": "...", "content": "..."}
+        """
+        return [
+            m for m in messages
+            if m.get("role") == "tool" and m.get("tool_call_id") == tool_call_id
+        ]
+
+    @staticmethod
+    def _has_tool_call(messages: list[dict[str, Any]], tool_name: str) -> bool:
+        """Check if any assistant message contains a tool_call with the given name.
+
+        In OpenAI format, tool calls are on assistant messages:
+        {"role": "assistant", "tool_calls": [{"function": {"name": "..."}}]}
+        """
+        for m in messages:
+            if m.get("role") != "assistant":
+                continue
+            for tc in m.get("tool_calls", []):
+                fn = tc.get("function", {})
+                if fn.get("name") == tool_name:
+                    return True
+        return False

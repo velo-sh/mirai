@@ -129,16 +129,19 @@ class TestConvertMessagesThoughtSignature:
     """Verify _convert_messages replays thought_signature as thoughtSignature."""
 
     def test_tool_use_with_signature_replayed(self):
-        """tool_use block with thought_signature → functionCall + thoughtSignature."""
+        """tool_calls with thought_signature → functionCall + thoughtSignature."""
         messages = [
             {
                 "role": "assistant",
-                "content": [
+                "content": None,
+                "tool_calls": [
                     {
-                        "type": "tool_use",
                         "id": "call_1",
-                        "name": "mirai_system",
-                        "input": {"action": "status"},
+                        "type": "function",
+                        "function": {
+                            "name": "mirai_system",
+                            "arguments": '{"action": "status"}',
+                        },
                         "thought_signature": "sig_replay_test",
                     }
                 ],
@@ -153,16 +156,16 @@ class TestConvertMessagesThoughtSignature:
         assert parts[0].get("thoughtSignature") == "sig_replay_test"
 
     def test_tool_use_without_signature_no_extra_field(self):
-        """tool_use block without thought_signature → no thoughtSignature key."""
+        """tool_calls without thought_signature → no thoughtSignature key."""
         messages = [
             {
                 "role": "assistant",
-                "content": [
+                "content": None,
+                "tool_calls": [
                     {
-                        "type": "tool_use",
                         "id": "call_1",
-                        "name": "echo",
-                        "input": {"text": "hi"},
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": '{"text": "hi"}'},
                     }
                 ],
             }
@@ -172,16 +175,16 @@ class TestConvertMessagesThoughtSignature:
         assert "thoughtSignature" not in parts[0]
 
     def test_tool_use_with_none_signature_no_extra_field(self):
-        """tool_use block with explicit None thought_signature → no thoughtSignature key."""
+        """tool_calls with explicit None thought_signature → no thoughtSignature key."""
         messages = [
             {
                 "role": "assistant",
-                "content": [
+                "content": None,
+                "tool_calls": [
                     {
-                        "type": "tool_use",
                         "id": "call_1",
-                        "name": "echo",
-                        "input": {"text": "hi"},
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": '{"text": "hi"}'},
                         "thought_signature": None,
                     }
                 ],
@@ -201,19 +204,31 @@ class TestThoughtSignatureRoundTrip:
     """End-to-end: parse SSE → model_dump → convert_messages → verify."""
 
     def test_full_round_trip(self):
+        import json
+
         # Step 1: Parse SSE response (simulating Gemini API response)
         resp = AntigravityProvider._parse_sse_response(SSE_WITH_SIGNATURE_V2)
         tool_block = resp.tool_use_blocks()[0]
         assert tool_block.thought_signature == "sig_xyz_789"
 
-        # Step 2: model_dump (as done in loop.py line 269)
-        dumped = tool_block.model_dump()
-        assert dumped["thought_signature"] == "sig_xyz_789"
+        # Step 2: Build OpenAI-format assistant message (as done in loop.py)
+        assistant_msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tool_block.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_block.name,
+                        "arguments": json.dumps(tool_block.input),
+                    },
+                    "thought_signature": tool_block.thought_signature,
+                }
+            ],
+        }
 
-        # Step 3: Build assistant message (as done in loop.py)
-        assistant_msg = {"role": "assistant", "content": [dumped]}
-
-        # Step 4: Convert back to Gemini format (as done in _convert_messages)
+        # Step 3: Convert back to Gemini format (as done in _convert_messages)
         converted = AntigravityProvider._convert_messages([assistant_msg])
         parts = converted[0]["parts"]
 
