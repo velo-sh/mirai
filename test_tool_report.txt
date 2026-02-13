@@ -1,0 +1,12 @@
+# Tool Test Report
+
+## Status
+- echo: ✅
+- workspace_tool: ✅
+- git_tool: ✅
+- editor_tool: Testing...
+- mirai_system: Pending
+- shell_tool: ✅ (需拆开执行)
+
+## Note
+shell_tool 不支持 && 链式命令
