@@ -257,6 +257,20 @@ class ModelRegistry:
     # Agent mutations
     # ------------------------------------------------------------------
 
+    def find_provider_for_model(self, model_id: str) -> str | None:
+        """Look up which provider owns the given model ID.
+
+        Returns the provider name (e.g. 'minimax', 'anthropic') or None.
+        """
+        providers = self._data.get("providers", {})
+        for pname, pdata in providers.items():
+            if not pdata.get("available"):
+                continue
+            for m in pdata.get("models", []):
+                if m["id"] == model_id:
+                    return pname
+        return None
+
     async def set_active(self, provider: str, model: str) -> None:
         """Set the active provider + model (runtime override). Persists to disk."""
         new_data = {**self._data, "active_provider": provider, "active_model": model}

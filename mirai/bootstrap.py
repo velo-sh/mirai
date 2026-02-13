@@ -93,6 +93,8 @@ class MiraiApp:
                 # In production, we use defaults (real DuckDB/LanceDB)
                 # Future: pass config.database.duckdb_path
             )
+            # Wire agent_loop reference for model hot-swap (circular dep resolved post-init)
+            system_tool._agent_loop = self.agent
             log.info("agent_initialized", collaborator=self.agent.name)
 
             # Start heartbeat with optional IM integration

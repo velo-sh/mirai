@@ -360,3 +360,142 @@ class TestRegression:
         import inspect
         source = inspect.getsource(AgentLoop._build_system_prompt)
         assert "MODEL_CATALOG" not in source
+
+
+# ===========================================================================
+# S: Model Switching (Phase 2)
+# ===========================================================================
+
+class TestModelSwitching:
+    """S1-S5: Model switching via set_active_model."""
+
+    @pytest.fixture
+    def switching_registry(self, tmp_registry_path: Path) -> Any:
+        """Registry with both minimax and anthropic available."""
+        data = {
+            "version": 1,
+            "active_provider": "minimax",
+            "active_model": "MiniMax-M2.5",
+            "providers": {
+                "minimax": {
+                    "available": True,
+                    "env_key": "MINIMAX_API_KEY",
+                    "models": [
+                        {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Reasoning", "reasoning": True, "vision": False},
+                    ],
+                },
+                "anthropic": {
+                    "available": True,
+                    "env_key": "ANTHROPIC_API_KEY",
+                    "models": [
+                        {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "description": "Fast", "reasoning": False, "vision": True},
+                    ],
+                },
+            },
+        }
+        return _make_registry_from_data(tmp_registry_path, data)
+
+    @pytest.mark.asyncio
+    async def test_s1_switch_valid_model(self, switching_registry):
+        """S1: Switch to valid model → provider swapped, registry updated."""
+        from mirai.agent.tools.system import SystemTool
+
+        mock_new_provider = MagicMock()
+        mock_new_provider.provider_name = "anthropic"
+        mock_new_provider.model = "claude-sonnet-4-20250514"
+
+        mock_agent_loop = MagicMock()
+
+        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+
+        with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider) as mock_factory:
+            result = await tool._set_active_model("claude-sonnet-4-20250514")
+
+        assert "✅" in result
+        assert "claude-sonnet-4-20250514" in result
+        mock_agent_loop.swap_provider.assert_called_once_with(mock_new_provider)
+        assert switching_registry.active_model == "claude-sonnet-4-20250514"
+        assert switching_registry.active_provider == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_s2_switch_unknown_model(self, switching_registry):
+        """S2: Switch to unknown model → error, no change."""
+        from mirai.agent.tools.system import SystemTool
+
+        mock_agent_loop = MagicMock()
+        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+
+        result = await tool._set_active_model("nonexistent-model")
+
+        assert "Error" in result
+        assert "not found" in result
+        mock_agent_loop.swap_provider.assert_not_called()
+        # Registry unchanged
+        assert switching_registry.active_model == "MiniMax-M2.5"
+
+    @pytest.mark.asyncio
+    async def test_s3_switch_already_active(self, switching_registry):
+        """S3: Switch to already-active model → no-op message."""
+        from mirai.agent.tools.system import SystemTool
+
+        mock_agent_loop = MagicMock()
+        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+
+        result = await tool._set_active_model("MiniMax-M2.5")
+
+        assert "Already using" in result
+        mock_agent_loop.swap_provider.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_s4_swap_provider_updates_loop(self):
+        """S4: swap_provider replaces self.provider on AgentLoop."""
+        from mirai.agent.loop import AgentLoop
+
+        old_provider = MagicMock()
+        old_provider.provider_name = "minimax"
+
+        new_provider = MagicMock()
+        new_provider.provider_name = "anthropic"
+        new_provider.model = "claude-sonnet-4"
+
+        loop = AgentLoop.__new__(AgentLoop)
+        loop.provider = old_provider
+
+        loop.swap_provider(new_provider)
+
+        assert loop.provider is new_provider
+        assert loop.provider.provider_name == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_s5_registry_persisted_after_switch(self, switching_registry, tmp_registry_path: Path):
+        """S5: Registry persists after switch → survives restart."""
+        from mirai.agent.tools.system import SystemTool
+
+        mock_new_provider = MagicMock()
+        mock_new_provider.provider_name = "anthropic"
+        mock_agent_loop = MagicMock()
+
+        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+
+        with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider):
+            await tool._set_active_model("claude-sonnet-4-20250514")
+
+        # Verify file was saved
+        saved = json.loads(tmp_registry_path.read_text())
+        assert saved["active_provider"] == "anthropic"
+        assert saved["active_model"] == "claude-sonnet-4-20250514"
+
+    @pytest.mark.asyncio
+    async def test_s_no_model_param(self, switching_registry):
+        """set_active_model with no model → error."""
+        from mirai.agent.tools.system import SystemTool
+        tool = SystemTool(registry=switching_registry)
+        result = await tool._set_active_model(None)
+        assert "Error" in result
+        assert "'model' parameter is required" in result
+
+    def test_find_provider_for_model(self, switching_registry):
+        """find_provider_for_model returns correct provider."""
+        assert switching_registry.find_provider_for_model("MiniMax-M2.5") == "minimax"
+        assert switching_registry.find_provider_for_model("claude-sonnet-4-20250514") == "anthropic"
+        assert switching_registry.find_provider_for_model("nonexistent") is None
