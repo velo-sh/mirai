@@ -25,6 +25,10 @@ class WorkspaceTool(BaseTool):
     async def execute(self, action: str, path: str = ".") -> str:  # type: ignore[override]
         # Basic security: stay within current workspace
         try:
+            # Additional check for absolute paths or traversal indicators in the input string itself
+            if os.path.isabs(path) or path.startswith("/"):
+                raise ValueError("Security Error: Absolute paths are not allowed.")
+
             # Normalize slashes for security (handle backslashes on POSIX)
             path = path.replace("\\", "/")
             cwd = os.getcwd()
@@ -32,11 +36,7 @@ class WorkspaceTool(BaseTool):
 
             if not target_path.startswith(cwd):
                 raise ValueError(f"Security Error: Path {path} is outside the allowed workspace.")
-
-            # Additional check for absolute paths in the input string itself
-            if os.path.isabs(path) or path.startswith("/"):
-                raise ValueError("Security Error: Absolute paths are not allowed.")
-
+            
             safe_path = target_path
         except Exception as e:
             if "Security Error" in str(e):

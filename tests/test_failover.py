@@ -32,7 +32,7 @@ async def test_antigravity_provider_failover():
 
         provider._http.post = AsyncMock(return_value=mock_response)
 
-        # This should trigger failover from claude-sonnet-4-20250514 -> claude-sonnet-4-5 (100%) -> claude-opus (100%) -> gemini-3-pro-high (0%)
+        # This should trigger failover from claude-sonnet-4-20250514 -> claude-sonnet-4-5 (100%) -> claude-opus-4-6-thinking (mocked to succeed)
         # Note: MODEL_MAP maps "claude-sonnet-4-20250514" to "claude-sonnet-4-5"
         resp = await provider.generate_response(
             model="claude-sonnet-4-20250514", system="sys", messages=[{"role": "user", "content": "hi"}], tools=[]
@@ -40,14 +40,14 @@ async def test_antigravity_provider_failover():
 
         # Verify result
         assert resp.text() == "Hello from fallback"
-        assert resp.model_id == "gemini-3-pro-high"
+        assert resp.model_id == "claude-opus-4-6-thinking"
 
         # Verify the correct model was sent in the request
         call_args = provider._http.post.call_args
         import orjson
 
         body = orjson.loads(call_args[1]["content"])
-        assert body["model"] == "gemini-3-pro-high"
+        assert body["model"] == "claude-opus-4-6-thinking"
 
 
 @pytest.mark.asyncio

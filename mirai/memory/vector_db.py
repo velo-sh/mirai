@@ -53,15 +53,24 @@ class VectorStore:
             for entry in entries
         ]
 
+        print(f"DEBUG: VectorStore adding {len(data)} entries to {self.db_path}")
         if self.table_name in self.db.list_tables():
             table = self.db.open_table(self.table_name)
             table.add(data)
+            print(f"DEBUG: Added rows. Total: {table.count_rows()}")
         else:
-            self.db.create_table(self.table_name, data=data, schema=self._get_schema(dim), exist_ok=True)
+            print("DEBUG: Creating table")
+            table = self.db.create_table(self.table_name, data=data, schema=self._get_schema(dim), exist_ok=True)
+            print(f"DEBUG: Created table. Rows: {table.count_rows()}")
 
     async def search(self, vector: list[float], limit: int = 5, filter: str | None = None):
-        if self.table_name not in self.db.list_tables():
+        try:
+            table = self.db.open_table(self.table_name)
+        except Exception:
             return []
+        
+        # print(f"DEBUG: Search rows: {table.count_rows()}. Filter: {filter}")
+        # ...
 
         table = self.db.open_table(self.table_name)
         query = table.search(vector).limit(limit)

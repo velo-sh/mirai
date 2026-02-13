@@ -40,8 +40,29 @@ def _reset():
 @pytest.fixture
 def real_app():
     """TestClient with a real AgentLoop backed by MockProvider."""
-    saved = main_module.agent
-    main_module.agent = _create_real_agent()
+    # We need to patch main._mirai since 'agent' is no longer global
+    # We'll create a dummy MiraiApp wrapper or just patch _mirai directly if accessible
+    
+    # Check if _mirai exists, if not (app not started), we might need to simulate it
+    # However, main.py lifespan handles init.
+    # But this fixture wants to INJECT a specific agent.
+    
+    from mirai.bootstrap import MiraiApp
+    from unittest.mock import MagicMock, AsyncMock
+    
+    # Create a wrapper that mimics MiraiApp but with our agent
+    real_agent = _create_real_agent()
+    
+    original_mirai = main_module._mirai
+    
+    # Mock app that holds our agent
+    mock_app = MagicMock(spec=MiraiApp)
+    mock_app.agent = real_agent
+    mock_app.config = MagicMock()
+    mock_app.start =  AsyncMock()
+    mock_app.shutdown = AsyncMock()
+    
+    main_module._mirai = mock_app
 
     from fastapi import FastAPI
 
@@ -53,7 +74,8 @@ def real_app():
 
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
-    main_module.agent = saved
+    
+    main_module._mirai = original_mirai
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +97,7 @@ class TestIntegrationChat:
         resp = real_app.post("/chat", json={"message": "hello"})
         assert resp.status_code == 200
         # MockProvider tracks call_count
-        assert main_module.agent.provider.call_count >= 3
+        assert main_module._mirai.agent.provider.call_count >= 3
 
     def test_response_is_string(self, real_app):
         resp = real_app.post("/chat", json={"message": "test"})

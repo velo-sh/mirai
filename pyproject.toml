@@ -63,3 +63,7 @@ ignore_missing_imports = true
 check_untyped_defs = true
 explicit_package_bases = true
 no_implicit_optional = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"

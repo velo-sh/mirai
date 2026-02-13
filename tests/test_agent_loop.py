@@ -26,31 +26,32 @@ async def agent(tmp_db_paths, tmp_path):
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
 
     # Monkey-patch DuckDB path before AgentLoop.create
-    with patch("mirai.agent.loop.DuckDBStorage") as MockDuck:
-        mock_duck = MockDuck.return_value
-        mock_duck.append_trace = AsyncMock()
-        mock_duck.get_traces_by_ids = AsyncMock(return_value=[])
+    # Create mocks
+    mock_duck = AsyncMock()
+    mock_duck.append_trace = AsyncMock()
+    mock_duck.get_traces_by_ids = AsyncMock(return_value=[])
 
-        with patch("mirai.agent.loop.VectorStore") as MockVec:
-            mock_vec = MockVec.return_value
-            mock_vec.search = AsyncMock(return_value=[])
-            mock_vec.add = AsyncMock()
+    mock_vec = AsyncMock()
+    mock_vec.search = AsyncMock(return_value=[])
+    mock_vec.add = AsyncMock()
 
-            agent = AgentLoop(
-                provider=provider,
-                tools=tools,
-                collaborator_id=collaborator_id,
-            )
-            agent.name = "TestCollaborator"
-            agent.role = "Test"
-            agent.base_system_prompt = "You are a test collaborator."
-            agent.l3_storage = mock_duck
-            agent.l2_storage = mock_vec
-            agent.embedder = provider  # MockProvider doesn't have get_embeddings, use mock
-            agent.embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
-            agent.soul_content = ""
+    mock_embedder = AsyncMock()
+    mock_embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
 
-            yield agent
+    agent = AgentLoop(
+        provider=provider,
+        tools=tools,
+        collaborator_id=collaborator_id,
+        l3_storage=mock_duck,
+        l2_storage=mock_vec,
+        embedder=mock_embedder,
+    )
+    agent.name = "TestCollaborator"
+    agent.role = "Test"
+    agent.base_system_prompt = "You are a test collaborator."
+    agent.soul_content = ""
+
+    yield agent
 
 
 # ---------------------------------------------------------------------------

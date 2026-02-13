@@ -1,7 +1,6 @@
 """Unit tests for mirai.config — pydantic-settings configuration system."""
 
 import os
-
 from mirai.config import (
     AgentConfig,
     DatabaseConfig,
@@ -20,7 +19,7 @@ from mirai.config import (
 class TestConfigDefaults:
     def test_llm_defaults(self):
         cfg = LLMConfig()
-        assert cfg.default_model == "claude-sonnet-4-20250514"
+        assert cfg.default_model == "gemini-3-flash"
         assert cfg.max_tokens == 4096
         assert cfg.max_retries == 3
 
@@ -66,7 +65,7 @@ class TestMiraiConfigLoad:
                 monkeypatch.delenv(key, raising=False)
 
         cfg = MiraiConfig.load()
-        assert cfg.llm.default_model == "claude-sonnet-4-20250514"
+        assert cfg.llm.default_model == "gemini-3-flash"
         assert cfg.server.port == 8000
         assert cfg.heartbeat.enabled is True
 
@@ -131,7 +130,8 @@ class TestConfigEdgeCases:
         """If config_path doesn't exist, defaults should be used."""
         fake_path = tmp_path / "nonexistent.toml"
         cfg = MiraiConfig.load(config_path=fake_path)
-        assert cfg.llm.default_model == "claude-sonnet-4-20250514"
+        # Defaults to gemini-3-flash now
+        assert cfg.llm.default_model == "gemini-3-flash"
 
     def test_empty_toml_uses_defaults(self, tmp_toml):
         """An empty TOML file should still work with all defaults."""

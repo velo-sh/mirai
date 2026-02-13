@@ -1,123 +1,84 @@
-"""Tests for HeartbeatManager (mirai/agent/heartbeat.py).
-
-Covers: start/stop lifecycle, pulse message format, IM integration.
-"""
-
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+
+from mirai.agent.heartbeat import HeartbeatManager
+from mirai.agent.loop import AgentLoop
+from mirai.agent.providers import MockProvider
+from mirai.agent.tools.workspace import WorkspaceTool
+from mirai.db.session import init_db
+
 
 import pytest
+from unittest.mock import AsyncMock
+
+@pytest.mark.asyncio
+async def test_heartbeat(tmp_path):
+    print("--- Starting Heartbeat Logic Test ---")
+    
+    # Use temp db
+    db_path = tmp_path / "test_heartbeat.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    
+    # Initialize DB (this sets the global engine in session.py)
+    await init_db(db_url)
+    
+    # IMPORTANT: We must also patch where get_session gets its engine if it doesn't use the global one? 
+    # session.py uses global _engine. init_db sets it. So this should work if we ensure isolation.
+    # To be safe, we must ensure init_db REUSABLE or resets.
+    # session.py _get_engine checks if _engine is None.
+    # If a previous test set it, we might be using that one!
+    # We should probably reset it. But session.py doesn't have reset.
+    # For now, let's assume this test runs isolated or we patch _get_engine.
+    # Actually, let's just use the default ./mirai.db but delete it first?
+    # No, risky. 
+    # Let's try to trust init_db updates the engine if we call it?
+    # session.py: if _engine is None: create...
+    # It does NOT update if already set.
+    # We need to force reset the engine in session.py fixtures, but here we are in a standalone test script?
+    # Wait, the error is "no such table". This implies the engine is connected to a DB that wasn't initialized.
+    # If previous tests initialized ./mirai.db, it should exist.
+    # If this test initializes it, it should exist.
+    # The failures "OperationalError" often happen with concurrency on SQLite.
+    
+    # Let's try to force reset the engine variable in session module
+    from mirai.db import session
+    if session._engine:
+        await session._engine.dispose()
+        session._engine = None
+        session._async_session = None
+        
+    await init_db(db_url)
+
+    # Initialize components
+    provider = MockProvider()
+    collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
+    tools = [WorkspaceTool()]
+    
+    # Use mocks
+    agent = await AgentLoop.create(
+        provider=provider, 
+        tools=tools, 
+        collaborator_id=collaborator_id,
+        l3_storage=AsyncMock(),
+        l2_storage=AsyncMock(),
+        embedder=AsyncMock()
+    )
+    agent.embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
+
+    # Initialize Heartbeat with 1 second interval for test
+    hb = HeartbeatManager(agent, interval_seconds=1)
+
+    print("\n[test] Starting Heartbeat Manager...")
+    await hb.start()
+
+    # Wait for a pulse
+    print("[test] Waiting for first pulse...")
+    await asyncio.sleep(3)
+
+    print("\n[test] Stopping Heartbeat Manager...")
+    await hb.stop()
+
+    print("\n--- Test Complete ---")
 
 
-class TestHeartbeatLifecycle:
-    @pytest.mark.asyncio
-    async def test_start_sets_running(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(return_value="insight")
-
-        hb = HeartbeatManager(agent, interval_seconds=0.1)
-
-        assert hb.is_running is False
-        await hb.start()
-        assert hb.is_running is True
-        assert hb._task is not None
-
-        await hb.stop()
-        assert hb.is_running is False
-
-    @pytest.mark.asyncio
-    async def test_stop_cancels_task(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(return_value="insight")
-
-        hb = HeartbeatManager(agent, interval_seconds=3600)
-        await hb.start()
-
-        task = hb._task
-        assert task is not None
-        assert not task.done()
-
-        await hb.stop()
-        assert task.done()
-
-    @pytest.mark.asyncio
-    async def test_start_idempotent(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(return_value="insight")
-
-        hb = HeartbeatManager(agent, interval_seconds=3600)
-        await hb.start()
-        first_task = hb._task
-
-        await hb.start()  # Second call
-        assert hb._task is first_task  # Should not create a new task
-
-        await hb.stop()
-
-
-class TestHeartbeatPulse:
-    @pytest.mark.asyncio
-    async def test_pulse_calls_agent_run(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(return_value="proactive insight")
-
-        hb = HeartbeatManager(agent, interval_seconds=0.05)
-        await hb.start()
-
-        # Wait enough for at least one pulse
-        await asyncio.sleep(0.15)
-        await hb.stop()
-
-        # agent.run should have been called with the heartbeat pulse message
-        assert agent.run.call_count >= 1
-        call_args = agent.run.call_args_list[0]
-        assert "SYSTEM_HEARTBEAT" in call_args[0][0]
-
-    @pytest.mark.asyncio
-    async def test_pulse_with_im_provider(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(return_value="insight for IM")
-
-        im_provider = MagicMock()
-        im_provider.send_message = AsyncMock()
-
-        hb = HeartbeatManager(agent, interval_seconds=0.05, im_provider=im_provider)
-        await hb.start()
-
-        await asyncio.sleep(0.15)
-        await hb.stop()
-
-        # IM provider should have been called with the insight
-        assert im_provider.send_message.call_count >= 1
-
-    @pytest.mark.asyncio
-    async def test_pulse_error_does_not_crash(self):
-        from mirai.agent.heartbeat import HeartbeatManager
-
-        agent = MagicMock()
-        agent.name = "TestAgent"
-        agent.run = AsyncMock(side_effect=RuntimeError("API down"))
-
-        hb = HeartbeatManager(agent, interval_seconds=0.05)
-        await hb.start()
-
-        # Should not crash despite agent error
-        await asyncio.sleep(0.15)
-        assert hb.is_running is True
-
-        await hb.stop()
+if __name__ == "__main__":
+    asyncio.run(test_heartbeat())

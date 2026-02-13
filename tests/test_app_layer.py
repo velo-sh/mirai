@@ -11,6 +11,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import main as main_module
+from mirai.bootstrap import MiraiApp
 
 
 def _make_mock_agent():
@@ -31,11 +32,18 @@ def _make_mock_agent():
     return agent
 
 
+def _make_mirai_app(agent=None):
+    """Create a MiraiApp instance with the given agent (or None)."""
+    mirai_app = MiraiApp()
+    mirai_app.agent = agent
+    mirai_app.start_time = time.monotonic()
+    return mirai_app
+
+
 @pytest.fixture(autouse=True)
 def _reset_state():
     """Reset rate limit state between tests."""
     main_module._rate_limits.clear()
-    main_module._start_time = time.monotonic()
     yield
     main_module._rate_limits.clear()
 
@@ -43,14 +51,12 @@ def _reset_state():
 @pytest.fixture
 def agent_client():
     """Client with mock agent, bypassing lifespan."""
-    saved = main_module.agent
-    main_module.agent = _make_mock_agent()
-    # Build the client by pointing to the app directly
-    # Use a fresh app with these routes but no lifespan
+    saved = main_module._mirai
+    main_module._mirai = _make_mirai_app(agent=_make_mock_agent())
+
     from fastapi import FastAPI
 
     test_app = FastAPI()
-    # Mount the route handlers from main onto test_app
     test_app.add_api_route("/health", main_module.health_check, methods=["GET"])
     test_app.add_api_route("/chat", main_module.chat, methods=["POST"])
     test_app.add_api_route("/chat/stream", main_module.chat_stream, methods=["POST"])
@@ -58,14 +64,15 @@ def agent_client():
 
     with TestClient(test_app, raise_server_exceptions=False) as c:
         yield c
-    main_module.agent = saved
+    main_module._mirai = saved
 
 
 @pytest.fixture
 def no_agent_client():
     """Client with agent=None, bypassing lifespan."""
-    saved = main_module.agent
-    main_module.agent = None
+    saved = main_module._mirai
+    main_module._mirai = _make_mirai_app(agent=None)
+
     from fastapi import FastAPI
 
     test_app = FastAPI()
@@ -76,7 +83,7 @@ def no_agent_client():
 
     with TestClient(test_app, raise_server_exceptions=False) as c:
         yield c
-    main_module.agent = saved
+    main_module._mirai = saved
 
 
 # ---------------------------------------------------------------------------

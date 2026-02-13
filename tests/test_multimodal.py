@@ -23,11 +23,16 @@ async def test_image_perception_pipeline():
     fake_image_bytes = b"fake-image-content"
     mock_resource_resp = MagicMock()
     mock_resource_resp.success.return_value = True
-    mock_resource_resp.raw.read.return_value = fake_image_bytes
-
+    
+    # Mock response.file as BytesIO
+    from io import BytesIO
+    mock_resource_resp.file = BytesIO(fake_image_bytes)
+    
     receiver._reply_client = MagicMock()
-    receiver._reply_client.im.v1.message.aget_resource = AsyncMock(return_value=mock_resource_resp)
+    # Correct path: im.v1.message_resource.aget
+    receiver._reply_client.im.v1.message_resource.aget = AsyncMock(return_value=mock_resource_resp)
     receiver._reply_client.im.v1.message.areply = AsyncMock(return_value=MagicMock(success=lambda: True))
+    receiver._reply_client.im.v1.message_reaction.acreate = AsyncMock(return_value=MagicMock(success=lambda: True))
 
     # Mock Storage
     receiver._storage = AsyncMock()

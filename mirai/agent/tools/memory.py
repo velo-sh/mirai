@@ -4,8 +4,10 @@ from mirai.agent.tools.base import BaseTool
 
 
 class MemorizeTool(BaseTool):
-    def __init__(self, collaborator_id: str):
+    def __init__(self, collaborator_id: str, vector_store: Any | None = None, l3_storage: Any | None = None):
         self.collaborator_id = collaborator_id
+        self.vector_store = vector_store
+        self.l3_storage = l3_storage
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -30,10 +32,9 @@ class MemorizeTool(BaseTool):
     async def execute(self, content: str, importance: float) -> str:  # type: ignore[override]
         # 1. Archive to L3 (HDD) using DuckDB
         from ulid import ULID
-
         from mirai.db.duck import DuckDBStorage
 
-        l3 = DuckDBStorage()
+        l3 = self.l3_storage or DuckDBStorage()
         trace_id = str(ULID())
         await l3.append_trace(
             id=trace_id,
@@ -51,7 +52,7 @@ class MemorizeTool(BaseTool):
         embedder = MockEmbeddingProvider()
         vector = await embedder.get_embeddings(content)
 
-        vdb = VectorStore()
+        vdb = self.vector_store or VectorStore()
         entry = MemoryEntry(
             content=content,
             metadata={"trace_id": trace_id},
