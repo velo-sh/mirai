@@ -8,6 +8,7 @@ from typing import Any
 
 import orjson
 
+from mirai.agent.providers.base import ProviderProtocol
 from mirai.logging import get_logger
 
 log = get_logger("mirai.agent.prompt")
@@ -18,7 +19,7 @@ async def build_system_prompt(
     collaborator_id: str,
     soul_content: str,
     base_system_prompt: str,
-    provider: Any,
+    provider: ProviderProtocol,
     embedder: Any,
     l2_storage: Any,
     l3_storage: Any,
@@ -31,9 +32,7 @@ async def build_system_prompt(
     """
     # Memory recall (L2 → L3)
     query_vector = await embedder.get_embeddings(msg_text)
-    memories = await l2_storage.search(
-        vector=query_vector, limit=3, filter=f"collaborator_id = '{collaborator_id}'"
-    )
+    memories = await l2_storage.search(vector=query_vector, limit=3, filter=f"collaborator_id = '{collaborator_id}'")
 
     memory_context = ""
     if memories:
@@ -49,8 +48,8 @@ async def build_system_prompt(
                 memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
 
     # Lightweight runtime info (full model catalog is via list_models tool)
-    provider_name = getattr(provider, 'provider_name', 'unknown')
-    current_model = getattr(provider, 'model', 'unknown')
+    provider_name = getattr(provider, "provider_name", "unknown")
+    current_model = getattr(provider, "model", "unknown")
     runtime_info = f"Provider: {provider_name} | Model: {current_model}"
 
     # Sandwich pattern: identity → context → memories → runtime → reinforcement → rules
