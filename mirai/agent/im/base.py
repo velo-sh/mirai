@@ -14,3 +14,8 @@ class BaseIMProvider(ABC):
     async def send_card(self, card_content: dict[str, Any], chat_id: str | None = None) -> bool:
         """Send a rich card message."""
         ...
+
+    async def send_markdown(self, content: str, title: str = "Mira", chat_id: str | None = None) -> bool:
+        """Send a markdown-rendered message. Falls back to plain text."""
+        return await self.send_message(content, chat_id=chat_id)
+

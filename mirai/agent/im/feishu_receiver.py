@@ -262,14 +262,27 @@ class FeishuEventReceiver:
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
 
-            # Step 4: Send the real response (using reply to maintain thread context)
+            # Step 4: Send the real response as a markdown card (reply to maintain thread)
+            card_body = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": "Mira"},
+                    "template": "blue",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": reply_text},
+                    }
+                ],
+            }
             reply_request = (
                 ReplyMessageRequest.builder()
                 .message_id(message_id)
                 .request_body(
                     ReplyMessageRequestBody.builder()
-                    .msg_type("text")
-                    .content(orjson.dumps({"text": reply_text}).decode())
+                    .msg_type("interactive")
+                    .content(orjson.dumps(card_body).decode())
                     .build()
                 )
                 .build()

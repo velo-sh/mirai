@@ -128,6 +128,54 @@ class FeishuProvider(BaseIMProvider):
 
         return False
 
+    async def send_markdown(
+        self,
+        content: str,
+        title: str = "Mira",
+        chat_id: str | None = None,
+        prefer_p2p: bool = False,
+        color: str = "blue",
+    ) -> bool:
+        """Send a markdown-rendered message via interactive card.
+
+        Feishu's card markdown element supports:
+          **bold**, *italic*, ~~strikethrough~~, [link](url),
+          `inline code`, ```code blocks```, - lists, 1. ordered lists
+
+        Unsupported (auto-stripped): # headings (use title param),
+          > blockquotes, tables, images (use send_card for those).
+
+        Args:
+            content: Markdown text to render.
+            title: Card header title.
+            chat_id: Target chat (auto-discovered if None).
+            prefer_p2p: Prefer private chat.
+            color: Header color template (blue, green, red, yellow, etc.).
+        """
+        # Feishu markdown element has a ~4000 char limit per element;
+        # chunk long content into multiple elements.
+        MAX_CHUNK = 3800
+        elements: list[dict[str, Any]] = []
+        remaining = content
+        while remaining:
+            chunk = remaining[:MAX_CHUNK]
+            remaining = remaining[MAX_CHUNK:]
+            elements.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": chunk},
+            })
+
+        card: dict[str, Any] = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": color,
+            },
+            "elements": elements,
+        }
+
+        return await self.send_card(card, chat_id=chat_id, prefer_p2p=prefer_p2p)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

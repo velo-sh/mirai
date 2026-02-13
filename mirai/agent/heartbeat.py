@@ -52,8 +52,10 @@ class HeartbeatManager:
 
                 # Proactive Push to IM
                 if self.im_provider:
-                    await self.im_provider.send_message(
-                        content=f"🤖 **Mirai 自省洞察** ({self.agent.name}):\n\n{response}", chat_id=self.chat_id
+                    await self.im_provider.send_markdown(
+                        content=f"**🤖 Mirai 自省洞察** ({self.agent.name})\n\n{response}",
+                        title="Mirai Heartbeat",
+                        chat_id=self.chat_id,
                     )
 
             except Exception as e:
