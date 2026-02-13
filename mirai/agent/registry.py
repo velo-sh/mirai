@@ -210,8 +210,12 @@ class ModelRegistry:
         """Resolve active model: registry (runtime) > config.toml (default)."""
         return self._data.get("active_model") or self._config_model or "unknown"
 
-    def get_catalog_text(self) -> str:
+    def get_catalog_text(self, quota_data: dict[str, float] | None = None) -> str:
         """Format the full model catalog as human-readable text.
+
+        Args:
+            quota_data: Optional dict of model_id → used_pct from QuotaManager.
+                        When provided, exhausted models are annotated.
 
         This is a pure in-memory read — no I/O, no blocking.
         """
@@ -249,6 +253,13 @@ class ModelRegistry:
                     desc += " [reasoning]"
                 if m.get("vision"):
                     desc += " [vision]"
+                # Annotate quota status if available
+                if quota_data and m["id"] in quota_data:
+                    pct = quota_data[m["id"]]
+                    if pct >= 100.0:
+                        desc += " ⚠️ exhausted"
+                    elif pct >= 80.0:
+                        desc += f" ({pct:.0f}% used)"
                 lines.append(desc + marker)
 
         return "\n".join(lines)
