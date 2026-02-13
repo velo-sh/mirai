@@ -10,12 +10,14 @@ from mirai.agent.providers.antigravity import AntigravityProvider, _RetryableAPI
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.providers.embeddings import MockEmbeddingProvider
 from mirai.agent.providers.factory import create_provider
+from mirai.agent.providers.minimax import MiniMaxProvider
 from mirai.agent.providers.openai import OpenAIProvider
 from mirai.agent.providers.quota import QuotaManager
 
 __all__ = [
     "AnthropicProvider",
     "AntigravityProvider",
+    "MiniMaxProvider",
     "MockEmbeddingProvider",
     "OpenAIProvider",
     "ProviderProtocol",

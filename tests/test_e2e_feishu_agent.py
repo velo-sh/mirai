@@ -117,7 +117,17 @@ class TestFeishuAgentE2E:
             """Captures reply API calls (both typing and real response)."""
             body = request.request_body
             content = orjson.loads(body.content)
-            text = content.get("text", "")
+            # Handle both plain text and interactive card formats
+            if body.msg_type == "interactive":
+                # Extract text from card elements (lark_md div)
+                elements = content.get("elements", [])
+                text = " ".join(
+                    el.get("text", {}).get("content", "")
+                    for el in elements
+                    if el.get("tag") == "div"
+                ) or str(content)
+            else:
+                text = content.get("text", "")
             feishu_calls.append(
                 {
                     "action": "reply",
