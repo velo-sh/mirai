@@ -1,6 +1,8 @@
 """Unit tests for mirai.config — pydantic-settings configuration system."""
 
 import os
+from unittest.mock import patch
+
 from mirai.config import (
     AgentConfig,
     DatabaseConfig,
@@ -57,14 +59,16 @@ class TestConfigDefaults:
 
 
 class TestMiraiConfigLoad:
-    def test_load_returns_defaults(self, monkeypatch):
+    def test_load_returns_defaults(self, monkeypatch, tmp_path):
         """With no TOML file and no env vars, all defaults should apply."""
         # Ensure no MIRAI_ env vars leak
         for key in list(os.environ):
             if key.startswith("MIRAI_"):
                 monkeypatch.delenv(key, raising=False)
 
-        cfg = MiraiConfig.load()
+        # Isolate from user's real ~/.mirai/config.toml
+        with patch("mirai.config.CONFIG_PATH", tmp_path / "nonexistent.toml"):
+            cfg = MiraiConfig.load()
         assert cfg.llm.default_model == "gemini-3-flash"
         assert cfg.server.port == 8000
         assert cfg.heartbeat.enabled is True
@@ -129,7 +133,9 @@ class TestConfigEdgeCases:
     def test_nonexistent_toml_path_uses_defaults(self, tmp_path):
         """If config_path doesn't exist, defaults should be used."""
         fake_path = tmp_path / "nonexistent.toml"
-        cfg = MiraiConfig.load(config_path=fake_path)
+        # Also isolate from user's real config via TomlSource
+        with patch("mirai.config.CONFIG_PATH", tmp_path / "also_nonexistent.toml"):
+            cfg = MiraiConfig.load(config_path=fake_path)
         # Defaults to gemini-3-flash now
         assert cfg.llm.default_model == "gemini-3-flash"
 

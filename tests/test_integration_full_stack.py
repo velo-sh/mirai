@@ -24,7 +24,9 @@ def _create_real_agent():
     provider = MockProvider()
     tools = [EchoTool(), WorkspaceTool()]
     agent = AgentLoop(
-        provider, tools, collaborator_id="integration-test",
+        provider,
+        tools,
+        collaborator_id="integration-test",
         l3_storage=DuckDBStorage(db_path=":memory:"),
     )
     agent.name = "IntegrationTestBot"
@@ -47,26 +49,27 @@ def real_app():
     """TestClient with a real AgentLoop backed by MockProvider."""
     # We need to patch main._mirai since 'agent' is no longer global
     # We'll create a dummy MiraiApp wrapper or just patch _mirai directly if accessible
-    
+
     # Check if _mirai exists, if not (app not started), we might need to simulate it
     # However, main.py lifespan handles init.
     # But this fixture wants to INJECT a specific agent.
-    
+
+    from unittest.mock import AsyncMock, MagicMock
+
     from mirai.bootstrap import MiraiApp
-    from unittest.mock import MagicMock, AsyncMock
-    
+
     # Create a wrapper that mimics MiraiApp but with our agent
     real_agent = _create_real_agent()
-    
+
     original_mirai = main_module._mirai
-    
+
     # Mock app that holds our agent
     mock_app = MagicMock(spec=MiraiApp)
     mock_app.agent = real_agent
     mock_app.config = MagicMock()
-    mock_app.start =  AsyncMock()
+    mock_app.start = AsyncMock()
     mock_app.shutdown = AsyncMock()
-    
+
     main_module._mirai = mock_app
 
     from fastapi import FastAPI
@@ -79,7 +82,7 @@ def real_app():
 
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
-    
+
     main_module._mirai = original_mirai
 
 
@@ -97,12 +100,12 @@ class TestIntegrationChat:
         assert "response" in data
         assert len(data["response"]) > 0
 
-    def test_provider_called_three_times(self, real_app):
-        """Think + Act + Critique = at least 3 provider calls."""
+    def test_provider_called_at_least_once(self, real_app):
+        """Single-pass loop should call provider at least once."""
         resp = real_app.post("/chat", json={"message": "hello"})
         assert resp.status_code == 200
         # MockProvider tracks call_count
-        assert main_module._mirai.agent.provider.call_count >= 3
+        assert main_module._mirai.agent.provider.call_count >= 1
 
     def test_response_is_string(self, real_app):
         resp = real_app.post("/chat", json={"message": "test"})
@@ -116,12 +119,11 @@ class TestIntegrationChat:
 
 class TestIntegrationStream:
     def test_stream_full_pipeline(self, real_app):
-        """SSE stream should contain thinking, chunks, and done events."""
+        """SSE stream should contain chunks and done events."""
         resp = real_app.post("/chat/stream", json={"message": "hello"})
         assert resp.status_code == 200
         body = resp.text
 
-        assert "event: thinking" in body
         assert "event: done" in body
         assert "event: chunk" in body
 
@@ -140,19 +142,19 @@ class TestIntegrationStream:
                 assert len(data) > 0
                 break
 
-    def test_stream_thinking_not_empty(self, real_app):
-        """The thinking event should contain monologue text."""
+    def test_stream_chunk_not_empty(self, real_app):
+        """The chunk events should contain response text."""
         resp = real_app.post("/chat/stream", json={"message": "hello"})
         body = resp.text
 
-        # Find thinking data
+        # Find first chunk data
         lines = body.split("\n")
         for i, line in enumerate(lines):
-            if line == "event: thinking":
+            if line == "event: chunk":
                 data_line = lines[i + 1]
                 assert data_line.startswith("data: ")
-                thinking_text = data_line[6:]
-                assert len(thinking_text) > 0
+                chunk_text = data_line[6:]
+                assert len(chunk_text) > 0
                 break
 
 
@@ -175,7 +177,7 @@ class TestIntegrationWebSocket:
                     break
 
             event_types = [e["event"] for e in events]
-            assert "thinking" in event_types
+            assert "chunk" in event_types
             assert "done" in event_types
             assert events[-1]["event"] == "done"
             assert len(events[-1]["data"]) > 0
