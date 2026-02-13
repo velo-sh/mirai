@@ -6,12 +6,11 @@ from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.workspace import WorkspaceTool
-from mirai.db.duck import DuckDBStorage
 from mirai.db.session import init_db
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_proactive_insight_flow():
+async def test_heartbeat_proactive_insight_flow(duckdb_storage):
     """
     QA E2E Test: Verify the full flow from Heartbeat Pulse to L3 Trace.
     """
@@ -21,7 +20,7 @@ async def test_heartbeat_proactive_insight_flow():
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [WorkspaceTool()]
-    agent = await AgentLoop.create(provider, tools, collaborator_id)
+    agent = await AgentLoop.create(provider, tools, collaborator_id, l3_storage=duckdb_storage)
     _hb = HeartbeatManager(agent, interval_seconds=1)  # noqa: F841
 
     # 2. Trigger the Heartbeat
@@ -35,7 +34,7 @@ async def test_heartbeat_proactive_insight_flow():
     assert "completed the proactive scan" in response
 
     # 4. Check L3 (HDD) traces for the 'thinking' and 'message' (insight)
-    l3 = DuckDBStorage()
+    l3 = duckdb_storage
     traces = await l3.get_recent_traces(collaborator_id, limit=20)
 
     # Find the 'thinking' trace from the heartbeat

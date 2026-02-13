@@ -285,10 +285,7 @@ class AgentLoop:
 
             monologue_text = think_response.text()
             await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
-            try:
-                yield ThinkingStep(monologue=monologue_text)
-            except GeneratorExit:
-                return
+            yield ThinkingStep(monologue=monologue_text)
 
             # Inject thinking into conversation so Phase 2 follows through
             monologue_wrapped = monologue_text
@@ -353,10 +350,7 @@ class AgentLoop:
 
                         result = await self._execute_tool(tool_call)
                         await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
-                        try:
-                            yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
-                        except GeneratorExit:
-                            return
+                        yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
 
                         messages.append({
                             "role": "user",
@@ -380,10 +374,7 @@ class AgentLoop:
                         final_text = content
                     break
 
-            try:
-                yield DraftStep(text=final_text)
-            except GeneratorExit:
-                return
+            yield DraftStep(text=final_text)
 
             # ---- Phase 3: Critique ----
             log.info("phase_critique_start", draft_length=len(final_text))
@@ -421,10 +412,7 @@ class AgentLoop:
                     refined_text = salvaged or "I acknowledge your message. (Personality online)"
 
             await self._archive_trace(refined_text, "message", {"role": "assistant"})
-            try:
-                yield RefinedStep(text=refined_text, draft=final_text)
-            except GeneratorExit:
-                return
+            yield RefinedStep(text=refined_text, draft=final_text)
 
 
     # ------------------------------------------------------------------
@@ -461,10 +449,11 @@ class AgentLoop:
         history: list[dict[str, Any]] | None = None,
     ) -> str:
         """Internal execution — consumes _execute_cycle and returns the final text."""
+        result = ""
         async for step in self._execute_cycle(message, model, history):
             if isinstance(step, RefinedStep):
-                return step.text
-        return ""
+                result = step.text
+        return result
 
     async def stream_run(self, message: str, model: str | None = None):
         """Async generator that yields SSE event dicts during the agent cycle.
