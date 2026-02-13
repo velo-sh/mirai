@@ -70,10 +70,12 @@ class SystemTool(BaseTool):
         config: Any | None = None,
         start_time: float | None = None,
         provider: Any | None = None,
+        registry: Any | None = None,
     ):
         self._config = config
         self._start_time = start_time or time.monotonic()
         self._provider = provider
+        self._registry = registry
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -83,6 +85,7 @@ class SystemTool(BaseTool):
                 "Introspect, configure, and control the Mirai runtime. "
                 "Actions: 'status' (read-only health check), "
                 "'usage' (per-model quota usage and reset times), "
+                "'list_models' (discover all available models across providers), "
                 "'patch_config' (modify whitelisted config keys), "
                 "'restart' (graceful self-restart)."
             ),
@@ -91,7 +94,7 @@ class SystemTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "usage", "patch_config", "restart"],
+                        "enum": ["status", "usage", "list_models", "patch_config", "restart"],
                         "description": "The action to perform.",
                     },
                     "patch": {
@@ -114,12 +117,14 @@ class SystemTool(BaseTool):
             return await self._status()
         elif action == "usage":
             return await self._usage()
+        elif action == "list_models":
+            return self._list_models()
         elif action == "patch_config":
             return await self._patch_config(patch or {})
         elif action == "restart":
             return await self._restart()
         else:
-            return f"Error: Unknown action '{action}'. Use 'status', 'usage', 'patch_config', or 'restart'."
+            return f"Error: Unknown action '{action}'. Use 'status', 'usage', 'list_models', 'patch_config', or 'restart'."
 
     # ------------------------------------------------------------------
     # Helpers
@@ -131,6 +136,16 @@ class SystemTool(BaseTool):
             await qm._maybe_refresh()
             return sorted(qm._quotas.keys())
         return []
+
+    # ------------------------------------------------------------------
+    # Action: list_models
+    # ------------------------------------------------------------------
+    def _list_models(self) -> str:
+        """Return all available models across all configured providers."""
+        if not self._registry:
+            return "Error: Model registry not available."
+        return self._registry.get_catalog_text()
+
 
     # ------------------------------------------------------------------
     # Action: status

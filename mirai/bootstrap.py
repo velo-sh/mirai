@@ -9,6 +9,7 @@ from mirai.agent.dreamer import Dreamer
 from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import create_provider
+from mirai.agent.registry import ModelRegistry, registry_refresh_loop
 from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.system import SystemTool
 from mirai.agent.tools.workspace import WorkspaceTool
@@ -27,6 +28,7 @@ class MiraiApp:
         self.agent: AgentLoop | None = None
         self.heartbeat: HeartbeatManager | None = None
         self.dreamer: Dreamer | None = None
+        self.registry: ModelRegistry | None = None
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
 
@@ -67,11 +69,22 @@ class MiraiApp:
                 base_url=config.llm.base_url,
             )
 
+            # Initialize model registry
+            self.registry = ModelRegistry(
+                config_provider=config.llm.provider,
+                config_model=config.llm.default_model,
+            )
+
             from mirai.agent.tools.editor import EditorTool
             from mirai.agent.tools.git import GitTool
             from mirai.agent.tools.shell import ShellTool
 
-            system_tool = SystemTool(config=config, start_time=self.start_time, provider=provider)
+            system_tool = SystemTool(
+                config=config,
+                start_time=self.start_time,
+                provider=provider,
+                registry=self.registry,
+            )
             tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool(), GitTool(), system_tool]
             self.agent = await AgentLoop.create(
                 provider=provider,
@@ -100,6 +113,11 @@ class MiraiApp:
 
             # Start Dreamer service
             self._start_dreamer(config)
+
+            # Start model registry background refresh
+            asyncio.get_running_loop().create_task(
+                registry_refresh_loop(self.registry)
+            )
 
         except Exception as e:
             log.error("agent_init_failed", error=str(e))
