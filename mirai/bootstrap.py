@@ -62,17 +62,29 @@ class MiraiApp:
 
         # Initialize Agent components
         try:
-            provider = create_provider(
-                provider=config.llm.provider,
-                model=config.llm.default_model,
-                api_key=config.llm.api_key,
-                base_url=config.llm.base_url,
-            )
-
-            # Initialize model registry
+            # Initialize model registry first to discover persisted active model
             self.registry = ModelRegistry(
                 config_provider=config.llm.provider,
                 config_model=config.llm.default_model,
+            )
+
+            # Use persisted active model/provider if available, fall back to config
+            effective_provider = self.registry.active_provider
+            effective_model = self.registry.active_model
+            if effective_provider != config.llm.provider or effective_model != config.llm.default_model:
+                log.info(
+                    "registry_override",
+                    config_provider=config.llm.provider,
+                    config_model=config.llm.default_model,
+                    effective_provider=effective_provider,
+                    effective_model=effective_model,
+                )
+
+            provider = create_provider(
+                provider=effective_provider,
+                model=effective_model,
+                api_key=config.llm.api_key,
+                base_url=config.llm.base_url,
             )
 
             from mirai.agent.tools.editor import EditorTool
