@@ -1,5 +1,10 @@
-"""Message and tool format conversion for Cloud Code Assist."""
+"""Message and tool format conversion for Cloud Code Assist.
 
+Converts OpenAI-format messages (the internal canonical format) to
+Google Generative AI format used by the streamGenerateContent endpoint.
+"""
+
+import json
 import time
 from typing import Any
 
@@ -7,72 +12,99 @@ from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 
 
 def convert_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert Anthropic-format messages to Google Generative AI format."""
+    """Convert OpenAI-format messages to Google Generative AI format.
+
+    OpenAI format:
+        - role: "user" | "assistant" | "system" | "tool"
+        - content: str | None
+        - tool_calls: [{id, type, function: {name, arguments}}]  (assistant)
+        - tool_call_id: str  (tool)
+
+    Google Generative AI format:
+        - role: "user" | "model"
+        - parts: [{text}, {functionCall}, {functionResponse}]
+    """
     contents = []
     for msg in messages:
-        role = "user" if msg["role"] == "user" else "model"
+        role = msg.get("role", "")
         parts: list[dict[str, Any]] = []
-        content = msg.get("content", "")
 
-        if isinstance(content, str):
-            if content:  # Skip empty strings for Claude compatibility
-                parts.append({"text": content})
+        # System messages are handled separately (systemInstruction)
+        if role == "system":
+            continue
+
+        if role == "tool":
+            # Tool result → functionResponse
+            tool_call_id = msg.get("tool_call_id", "unknown")
+            result_text = msg.get("content", "")
+            fr_payload: dict[str, Any] = {
+                "name": tool_call_id,
+                "response": {"result": str(result_text)},
+            }
+            fr_payload["id"] = tool_call_id
+            parts.append({"functionResponse": fr_payload})
+            # Tool results are always from the user's perspective
+            if parts:
+                contents.append({"role": "user", "parts": parts})
+            continue
+
+        if role == "assistant":
+            gemini_role = "model"
+        else:
+            gemini_role = "user"
+
+        # Text content
+        content = msg.get("content")
+        if isinstance(content, str) and content:
+            parts.append({"text": content})
         elif isinstance(content, list):
+            # Handle legacy list-format content (e.g. image blocks)
             for block in content:
                 if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        if block.get("text"):  # Skip empty text for Claude compatibility
-                            parts.append({"text": block["text"]})
+                    if block.get("type") == "text" and block.get("text"):
+                        parts.append({"text": block["text"]})
                     elif block.get("type") == "image":
                         source = block.get("source", {})
                         if source.get("type") == "base64":
-                            parts.append(
-                                {
-                                    "inlineData": {
-                                        "mimeType": source.get("media_type", "image/png"),
-                                        "data": source.get("data", ""),
-                                    }
+                            parts.append({
+                                "inlineData": {
+                                    "mimeType": source.get("media_type", "image/png"),
+                                    "data": source.get("data", ""),
                                 }
-                            )
-                    elif block.get("type") == "tool_use":
-                        fc_payload: dict[str, Any] = {
-                            "name": block["name"],
-                            "args": block.get("input", {}),
-                        }
-                        # Preserve id for Claude model compatibility via Cloud Code Assist
-                        if block.get("id"):
-                            fc_payload["id"] = block["id"]
-                        fc_part: dict[str, Any] = {"functionCall": fc_payload}
-                        # Preserve Gemini 3 thought_signature for replay
-                        if block.get("thought_signature"):
-                            fc_part["thoughtSignature"] = block["thought_signature"]
-                        parts.append(fc_part)  # type: ignore[arg-type]
-                    elif block.get("type") == "tool_result":
-                        result_text = block.get("content", "")
-                        if isinstance(result_text, list):
-                            result_text = " ".join(
-                                b.get("text", "")
-                                for b in result_text
-                                if isinstance(b, dict) and b.get("type") == "text"
-                            )
-                        fr_payload: dict[str, Any] = {
-                            "name": block.get("tool_use_id", "unknown"),
-                            "response": {"result": str(result_text)},
-                        }
-                        # Preserve id for Claude model compatibility
-                        if block.get("tool_use_id"):
-                            fr_payload["id"] = block["tool_use_id"]
-                        parts.append(
-                            {"functionResponse": fr_payload}  # type: ignore[dict-item]
-                        )
+                            })
+
+        # Tool calls from assistant message → functionCall parts
+        for tc in msg.get("tool_calls", []):
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            fc_payload: dict[str, Any] = {
+                "name": fn.get("name", ""),
+                "args": args,
+            }
+            call_id = tc.get("id")
+            if call_id:
+                fc_payload["id"] = call_id
+            fc_part: dict[str, Any] = {"functionCall": fc_payload}
+            # Preserve Gemini 3 thought_signature for replay
+            thought_sig = tc.get("thought_signature")
+            if thought_sig:
+                fc_part["thoughtSignature"] = thought_sig
+            parts.append(fc_part)
 
         if parts:
-            contents.append({"role": role, "parts": parts})
+            contents.append({"role": gemini_role, "parts": parts})
     return contents
 
 
 def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert Anthropic-format tools to Google Generative AI format."""
+    """Convert internal tool definitions to Google Generative AI format.
+
+    Internal: {"name": ..., "description": ..., "input_schema": {...}}
+    Google:   {"functionDeclarations": [{"name": ..., "description": ..., "parameters": {...}}]}
+    """
     if not tools:
         return []
     declarations = []

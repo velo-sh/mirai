@@ -29,9 +29,20 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 
 class LLMConfig(BaseModel):
-    """LLM provider configuration."""
+    """LLM provider configuration.
 
+    provider: Which backend to use. Supported values:
+        - "antigravity" (Google Cloud Code Assist, default)
+        - "anthropic"   (Direct Anthropic API)
+        - "openai"      (OpenAI or any OpenAI-compatible endpoint)
+    api_key: API key for the provider (reads from env if not set)
+    base_url: Custom API endpoint (for OpenAI-compatible providers like DeepSeek)
+    """
+
+    provider: str = "antigravity"
     default_model: str = "gemini-3-flash"
+    api_key: str | None = None
+    base_url: str | None = None
     max_tokens: int = 4096
     max_retries: int = 3
 

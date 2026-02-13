@@ -131,7 +131,7 @@ class TestParseSSEResponse:
 
 
 # ---------------------------------------------------------------------------
-# Message Conversion (Anthropic → Google GenAI format)
+# Message Conversion (OpenAI → Google GenAI format)
 # ---------------------------------------------------------------------------
 
 
@@ -149,16 +149,23 @@ class TestConvertMessages:
         assert result[0]["role"] == "model"
 
     def test_text_block_content(self):
+        """Legacy list-format content should still be handled."""
         messages = [{"role": "user", "content": [{"type": "text", "text": "multi-block"}]}]
         result = AntigravityProvider._convert_messages(messages)
         assert result[0]["parts"] == [{"text": "multi-block"}]
 
-    def test_tool_use_block_content(self):
+    def test_tool_call_block_content(self):
+        """OpenAI tool_calls on assistant → Gemini functionCall."""
         messages = [
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "tool_use", "name": "echo", "input": {"message": "test"}},
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": '{"message": "test"}'},
+                    }
                 ],
             }
         ]
@@ -167,14 +174,10 @@ class TestConvertMessages:
         assert fc["name"] == "echo"
         assert fc["args"] == {"message": "test"}
 
-    def test_tool_result_block_content(self):
+    def test_tool_result_message(self):
+        """OpenAI role=tool → Gemini functionResponse."""
         messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "call_1", "content": "result_text"},
-                ],
-            }
+            {"role": "tool", "tool_call_id": "call_1", "content": "result_text"}
         ]
         result = AntigravityProvider._convert_messages(messages)
         fr = result[0]["parts"][0]["functionResponse"]
@@ -184,10 +187,15 @@ class TestConvertMessages:
     def test_empty_messages(self):
         assert AntigravityProvider._convert_messages([]) == []
 
-    def test_empty_content_produces_text_part(self):
+    def test_empty_content_produces_no_parts(self):
         messages = [{"role": "user", "content": ""}]
         result = AntigravityProvider._convert_messages(messages)
         # Empty string content is now skipped for Claude compatibility
+        assert len(result) == 0
+
+    def test_system_messages_filtered(self):
+        messages = [{"role": "system", "content": "You are a helpful assistant."}]
+        result = AntigravityProvider._convert_messages(messages)
         assert len(result) == 0
 
 

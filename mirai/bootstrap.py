@@ -60,7 +60,12 @@ class MiraiApp:
 
         # Initialize Agent components
         try:
-            provider = create_provider(model=config.llm.default_model)
+            provider = create_provider(
+                provider=config.llm.provider,
+                model=config.llm.default_model,
+                api_key=config.llm.api_key,
+                base_url=config.llm.base_url,
+            )
 
             from mirai.agent.tools.editor import EditorTool
             from mirai.agent.tools.git import GitTool
