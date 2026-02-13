@@ -89,6 +89,10 @@ class RegistryConfig(BaseModel):
     """Model registry configuration."""
 
     refresh_interval: int = 300  # seconds between registry refreshes
+    fallback_models: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of fallback model IDs to try when the primary model fails.",
+    )
 
 
 class TomlSource(PydanticBaseSettingsSource):

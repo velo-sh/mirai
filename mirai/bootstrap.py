@@ -102,8 +102,7 @@ class MiraiApp:
                 provider=provider,
                 tools=tools,
                 collaborator_id=config.agent.collaborator_id,
-                # In production, we use defaults (real DuckDB/LanceDB)
-                # Future: pass config.database.duckdb_path
+                fallback_models=config.registry.fallback_models,
             )
             # Wire agent_loop reference for model hot-swap (circular dep resolved post-init)
             system_tool._agent_loop = self.agent

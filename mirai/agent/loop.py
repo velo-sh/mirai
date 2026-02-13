@@ -83,10 +83,12 @@ class AgentLoop:
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
         embedder: Any | None = None,
+        fallback_models: list[str] | None = None,
     ):
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
         self.collaborator_id = collaborator_id
+        self.fallback_models: list[str] = fallback_models or []
 
         # Dependency Injection with fallbacks
         self.l3_storage = l3_storage or DuckDBStorage()
@@ -118,10 +120,12 @@ class AgentLoop:
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
         embedder: Any | None = None,
+        fallback_models: list[str] | None = None,
     ):
         """Factory method to create and initialize an AgentLoop instance."""
         instance = cls(
-            provider, tools, collaborator_id, l3_storage=l3_storage, l2_storage=l2_storage, embedder=embedder
+            provider, tools, collaborator_id, l3_storage=l3_storage,
+            l2_storage=l2_storage, embedder=embedder, fallback_models=fallback_models,
         )
         await instance._initialize()
         return instance
@@ -243,9 +247,29 @@ class AgentLoop:
                         tool_names=[t["name"] for t in tool_definitions],
                         round=tool_round,
                     )
-                    response: ProviderResponse = await self.provider.generate_response(
-                        model=model, system=full_system_prompt, messages=messages, tools=tool_definitions
-                    )
+                    # Attempt primary model, then fallback chain on failure
+                    response: ProviderResponse | None = None
+                    models_to_try = [model] + [m for m in self.fallback_models if m != model]
+                    last_error: Exception | None = None
+                    for attempt_model in models_to_try:
+                        try:
+                            response = await self.provider.generate_response(
+                                model=attempt_model, system=full_system_prompt,
+                                messages=messages, tools=tool_definitions,
+                            )
+                            if attempt_model != model:
+                                log.info("fallback_model_succeeded", model=attempt_model)
+                            break
+                        except Exception as exc:
+                            last_error = exc
+                            log.warning(
+                                "model_call_failed",
+                                model=attempt_model,
+                                error=str(exc),
+                                remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
+                            )
+                    if response is None:
+                        raise last_error or RuntimeError("All models in fallback chain failed")
                     log.info(
                         "llm_response",
                         stop_reason=response.stop_reason,
