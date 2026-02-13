@@ -71,11 +71,13 @@ class SystemTool(BaseTool):
         start_time: float | None = None,
         provider: Any | None = None,
         registry: Any | None = None,
+        agent_loop: Any | None = None,
     ):
         self._config = config
         self._start_time = start_time or time.monotonic()
         self._provider = provider
         self._registry = registry
+        self._agent_loop = agent_loop
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -86,6 +88,7 @@ class SystemTool(BaseTool):
                 "Actions: 'status' (read-only health check), "
                 "'usage' (per-model quota usage and reset times), "
                 "'list_models' (discover all available models across providers), "
+                "'set_active_model' (switch to a different model at runtime), "
                 "'patch_config' (modify whitelisted config keys), "
                 "'restart' (graceful self-restart)."
             ),
@@ -94,8 +97,16 @@ class SystemTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "usage", "list_models", "patch_config", "restart"],
+                        "enum": ["status", "usage", "list_models", "set_active_model", "patch_config", "restart"],
                         "description": "The action to perform.",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "For 'set_active_model' only. The model ID to switch to "
+                            "(e.g. 'claude-sonnet-4-20250514', 'MiniMax-M2.5'). "
+                            "Use 'list_models' first to see available options."
+                        ),
                     },
                     "patch": {
                         "type": "object",
@@ -112,19 +123,24 @@ class SystemTool(BaseTool):
             },
         }
 
-    async def execute(self, action: str, patch: dict[str, Any] | None = None) -> str:  # type: ignore[override]
+    async def execute(self, action: str, patch: dict[str, Any] | None = None, model: str | None = None) -> str:  # type: ignore[override]
         if action == "status":
             return await self._status()
         elif action == "usage":
             return await self._usage()
         elif action == "list_models":
             return self._list_models()
+        elif action == "set_active_model":
+            return await self._set_active_model(model)
         elif action == "patch_config":
             return await self._patch_config(patch or {})
         elif action == "restart":
             return await self._restart()
         else:
-            return f"Error: Unknown action '{action}'. Use 'status', 'usage', 'list_models', 'patch_config', or 'restart'."
+            return (
+                f"Error: Unknown action '{action}'. "
+                "Use 'status', 'usage', 'list_models', 'set_active_model', 'patch_config', or 'restart'."
+            )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -146,7 +162,52 @@ class SystemTool(BaseTool):
             return "Error: Model registry not available."
         return self._registry.get_catalog_text()
 
+    # ------------------------------------------------------------------
+    # Action: set_active_model
+    # ------------------------------------------------------------------
+    async def _set_active_model(self, model: str | None) -> str:
+        """Switch to a different model at runtime via provider hot-swap."""
+        if not model:
+            return "Error: 'model' parameter is required. Use 'list_models' to see available options."
 
+        if not self._registry:
+            return "Error: Model registry not available."
+
+        # 1. Validate model exists in registry
+        provider_name = self._registry.find_provider_for_model(model)
+        if not provider_name:
+            return (
+                f"Error: Model '{model}' not found in any available provider. "
+                "Use action='list_models' to see available options."
+            )
+
+        # 2. Check if already active
+        if model == self._registry.active_model and provider_name == self._registry.active_provider:
+            return f"Already using model '{model}' on provider '{provider_name}'."
+
+        # 3. Create new provider via factory
+        try:
+            from mirai.agent.providers.factory import create_provider
+            new_provider = create_provider(provider=provider_name, model=model)
+        except Exception as exc:
+            log.error("model_switch_failed", model=model, provider=provider_name, error=str(exc))
+            return f"Error: Failed to create provider for '{model}': {exc}"
+
+        # 4. Hot-swap on AgentLoop
+        if not self._agent_loop:
+            return "Error: Agent loop not available for provider swap."
+
+        self._agent_loop.swap_provider(new_provider)
+        self._provider = new_provider  # update our own reference too
+
+        # 5. Persist to registry
+        await self._registry.set_active(provider_name, model)
+
+        log.info("model_switched", model=model, provider=provider_name)
+        return (
+            f"✅ Switched to **{model}** (provider: {provider_name}).\n"
+            "This takes effect starting with my next response."
+        )
     # ------------------------------------------------------------------
     # Action: status
     # ------------------------------------------------------------------

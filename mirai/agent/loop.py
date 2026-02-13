@@ -95,6 +95,17 @@ class AgentLoop:
         self.l2_storage = l2_storage or VectorStore()
         self.embedder = embedder or MockEmbeddingProvider()
 
+    def swap_provider(self, new_provider: Any) -> None:
+        """Hot-swap the LLM provider at runtime.
+
+        Takes effect on the next ``generate_response()`` call.
+        """
+        old_name = getattr(self.provider, 'provider_name', 'unknown')
+        new_name = getattr(new_provider, 'provider_name', 'unknown')
+        self.provider = new_provider
+        log.info("provider_swapped", old=old_name, new=new_name,
+                 model=getattr(new_provider, 'model', 'unknown'))
+
         # Identity attributes (to be loaded)
         self.name = ""
         self.role = ""
