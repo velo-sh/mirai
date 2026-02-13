@@ -421,7 +421,10 @@ class AgentLoop:
                     refined_text = salvaged or "I acknowledge your message. (Personality online)"
 
             await self._archive_trace(refined_text, "message", {"role": "assistant"})
-            yield RefinedStep(text=refined_text, draft=final_text)
+            try:
+                yield RefinedStep(text=refined_text, draft=final_text)
+            except GeneratorExit:
+                return
 
 
     # ------------------------------------------------------------------
