@@ -103,6 +103,14 @@ async def health_check():
         model_name = getattr(provider, "model", None) if provider else None
         start_time = getattr(_mirai, "start_time", 0) if _mirai else 0
 
+        # Gather quota status if available
+        quota_status: dict[str, float] | None = None
+        if provider and hasattr(provider, "quota_manager"):
+            try:
+                quota_status = dict(provider.quota_manager._quotas)
+            except Exception:
+                pass
+
         return {
             "status": "ok" if agent else "degraded",
             "pid": os.getpid(),
@@ -111,9 +119,11 @@ async def health_check():
             "agent_ready": agent is not None,
             "provider": provider_name,
             "model": model_name,
+            "quota_status": quota_status,
         }
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise e
 

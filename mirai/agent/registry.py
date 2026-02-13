@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ def _import_provider_class(import_path: str) -> type | None:
     try:
         module_path, class_name = import_path.rsplit(".", 1)
         import importlib
+
         module = importlib.import_module(module_path)
         return getattr(module, class_name)
     except Exception as exc:
@@ -97,7 +98,7 @@ class ModelRegistry:
             return data
 
         try:
-            with open(self.PATH, "r", encoding="utf-8") as f:
+            with open(self.PATH, encoding="utf-8") as f:
                 data = json.load(f)
             log.info(
                 "registry_loaded",
@@ -181,16 +182,20 @@ class ModelRegistry:
                 log.warning("registry_refresh_failed", provider=pname, error=str(exc))
                 # Keep last known state on failure
                 existing = self._data.get("providers", {}).get(pname, {})
-                new_providers[pname] = existing if existing else {
-                    "available": False,
-                    "env_key": env_key,
-                    "models": [],
-                }
+                new_providers[pname] = (
+                    existing
+                    if existing
+                    else {
+                        "available": False,
+                        "env_key": env_key,
+                        "models": [],
+                    }
+                )
 
         # Atomic swap (copy-on-write)
         new_data = {
             **self._data,
-            "last_refreshed": datetime.now(timezone.utc).isoformat(),
+            "last_refreshed": datetime.now(UTC).isoformat(),
             "providers": new_providers,
         }
         self._data = new_data
@@ -229,9 +234,7 @@ class ModelRegistry:
             lines.append(f"Last refreshed: {last_refreshed}")
 
         providers = self._data.get("providers", {})
-        available_providers = {
-            k: v for k, v in providers.items() if v.get("available")
-        }
+        available_providers = {k: v for k, v in providers.items() if v.get("available")}
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
@@ -240,7 +243,7 @@ class ModelRegistry:
         lines.append(f"\nAvailable models ({len(available_providers)} provider(s)):")
 
         for pname, pdata in available_providers.items():
-            is_active = (pname == self.active_provider)
+            is_active = pname == self.active_provider
             lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
             models = pdata.get("models", [])
             if not models:
@@ -294,12 +297,14 @@ class ModelRegistry:
 # Background refresh task
 # ---------------------------------------------------------------------------
 
-async def registry_refresh_loop(registry: ModelRegistry, interval: int = 300) -> None:
+
+async def registry_refresh_loop(registry: ModelRegistry, interval: int = 300, quota_manager=None) -> None:
     """Periodically refresh the model registry in the background.
 
     Args:
         registry: The ModelRegistry instance to refresh.
         interval: Seconds between refreshes (default: 5 minutes).
+        quota_manager: Optional QuotaManager to refresh alongside the registry.
     """
     # Initial refresh on startup
     try:
@@ -311,5 +316,10 @@ async def registry_refresh_loop(registry: ModelRegistry, interval: int = 300) ->
         await asyncio.sleep(interval)
         try:
             await registry.refresh()
+            if quota_manager:
+                try:
+                    await quota_manager._maybe_refresh()
+                except Exception as qe:
+                    log.warning("quota_periodic_refresh_failed", error=str(qe))
         except Exception as exc:
             log.warning("registry_periodic_refresh_failed", error=str(exc))

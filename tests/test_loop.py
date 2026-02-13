@@ -1,4 +1,7 @@
 import asyncio
+from unittest.mock import AsyncMock
+
+import pytest
 
 from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
@@ -7,27 +10,24 @@ from mirai.agent.tools.memory import MemorizeTool
 from mirai.db.session import init_db
 
 
-import pytest
-from unittest.mock import AsyncMock
-
 @pytest.mark.asyncio
-async def test_agent_loop():
+async def test_agent_loop(tmp_path):
     print("--- Starting Agent Loop Mock Test ---")
-    await init_db()
+    await init_db(f"sqlite+aiosqlite:///{tmp_path / 'mirai.db'}")
 
     # Initialize components
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [EchoTool(), MemorizeTool(collaborator_id=collaborator_id)]
-    
+
     # Use mocks for storage
     agent = await AgentLoop.create(
-        provider=provider, 
-        tools=tools, 
+        provider=provider,
+        tools=tools,
         collaborator_id=collaborator_id,
         l3_storage=AsyncMock(),
         l2_storage=AsyncMock(),
-        embedder=AsyncMock()
+        embedder=AsyncMock(),
     )
     # Mock embedder return
     agent.embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)

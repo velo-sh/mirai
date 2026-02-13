@@ -48,14 +48,21 @@ class DuckDBStorage:
             )
         """)
 
+    def _check_conn(self):
+        """Raise if connection has been closed."""
+        if self.conn is None:
+            raise RuntimeError("DuckDB connection is closed. Reinitialize DuckDBStorage to reconnect.")
+
     def _execute(self, sql: str, params: list[Any] | None = None):
         """Execute a statement synchronously (called via to_thread)."""
+        self._check_conn()
         if params:
             return self.conn.execute(sql, params)
         return self.conn.execute(sql)
 
     def _fetch_dicts(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         """Execute + fetchall as dicts (called via to_thread)."""
+        self._check_conn()
         rel = self.conn.execute(sql, params)
         columns = [desc[0] for desc in rel.description]
         return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
@@ -123,6 +130,7 @@ class DuckDBStorage:
         """Retrieve recent conversation history for a specific chat."""
 
         def _query():
+            self._check_conn()
             rel = self.conn.execute(
                 """
                 SELECT role, content FROM feishu_history

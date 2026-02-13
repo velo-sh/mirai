@@ -124,8 +124,13 @@ class AgentLoop:
     ):
         """Factory method to create and initialize an AgentLoop instance."""
         instance = cls(
-            provider, tools, collaborator_id, l3_storage=l3_storage,
-            l2_storage=l2_storage, embedder=embedder, fallback_models=fallback_models,
+            provider,
+            tools,
+            collaborator_id,
+            l3_storage=l3_storage,
+            l2_storage=l2_storage,
+            embedder=embedder,
+            fallback_models=fallback_models,
         )
         await instance._initialize()
         return instance
@@ -254,8 +259,10 @@ class AgentLoop:
                     for attempt_model in models_to_try:
                         try:
                             response = await self.provider.generate_response(
-                                model=attempt_model, system=full_system_prompt,
-                                messages=messages, tools=tool_definitions,
+                                model=attempt_model,
+                                system=full_system_prompt,
+                                messages=messages,
+                                tools=tool_definitions,
                             )
                             if attempt_model != model:
                                 log.info("fallback_model_succeeded", model=attempt_model)
@@ -266,6 +273,7 @@ class AgentLoop:
                                 "model_call_failed",
                                 model=attempt_model,
                                 error=str(exc),
+                                error_type=type(exc).__name__,
                                 remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
                             )
                     if response is None:
