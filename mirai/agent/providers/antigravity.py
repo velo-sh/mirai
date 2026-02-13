@@ -117,6 +117,28 @@ class AntigravityProvider:
         self.model = model
         self._http = httpx.AsyncClient(timeout=120.0, http2=True)
 
+    # ------------------------------------------------------------------
+    # Provider identity & discovery
+    # ------------------------------------------------------------------
+
+    @property
+    def provider_name(self) -> str:
+        return "antigravity"
+
+    async def list_models(self) -> list["ModelInfo"]:
+        """Return models available through Antigravity (Cloud Code Assist)."""
+        from mirai.agent.providers.base import ModelInfo
+
+        return [
+            ModelInfo(id="claude-sonnet-4-20250514", name="Claude Sonnet 4 (Antigravity)", context_window=200_000, max_tokens=8192),
+        ]
+
+    async def get_usage(self) -> "UsageSnapshot":
+        """Usage query not supported for Antigravity."""
+        from mirai.agent.providers.base import UsageSnapshot
+
+        return UsageSnapshot(provider="antigravity", error="not supported")
+
     async def _ensure_fresh_token(self) -> None:
         """Refresh the access token if expired."""
         if time.time() >= self.credentials.get("expires", 0):

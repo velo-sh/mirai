@@ -25,6 +25,7 @@ from tenacity import (
 )
 
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.logging import get_logger
 from mirai.tracing import get_tracer
 
@@ -44,6 +45,10 @@ class OpenAIProvider:
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     DEFAULT_MODEL = "gpt-4o"
 
+    # Subclasses can override with a static list of ModelInfo.
+    # When set, list_models() returns this instead of querying the API.
+    MODEL_CATALOG: list[ModelInfo] = []
+
     def __init__(
         self,
         api_key: str,
@@ -57,6 +62,41 @@ class OpenAIProvider:
             api_key=api_key,
             base_url=base_url or self.DEFAULT_BASE_URL,
         )
+
+    # ------------------------------------------------------------------
+    # Provider identity
+    # ------------------------------------------------------------------
+
+    @property
+    def provider_name(self) -> str:
+        return "openai"
+
+    # ------------------------------------------------------------------
+    # Model discovery & usage
+    # ------------------------------------------------------------------
+
+    async def list_models(self) -> list[ModelInfo]:
+        """List available models.
+
+        If the subclass defines ``MODEL_CATALOG``, return that directly.
+        Otherwise, query the OpenAI-compatible ``GET /models`` endpoint.
+        """
+        if self.MODEL_CATALOG:
+            return list(self.MODEL_CATALOG)
+        try:
+            resp = await self.client.models.list()
+            return [ModelInfo(id=m.id, name=m.id) for m in resp]
+        except Exception as exc:
+            log.warning("list_models_failed", error=str(exc))
+            return [ModelInfo(id=self.model, name=self.model)]
+
+    async def get_usage(self) -> UsageSnapshot:
+        """Query provider usage / quota. Not supported by default."""
+        return UsageSnapshot(provider=self.provider_name, error="not supported")
+
+    # ------------------------------------------------------------------
+    # Chat completion
+    # ------------------------------------------------------------------
 
     @retry(
         retry=retry_if_exception_type(openai.RateLimitError),
@@ -181,3 +221,4 @@ class OpenAIProvider:
             stop_reason=stop_reason,
             model_id=model_id or response.model,
         )
+

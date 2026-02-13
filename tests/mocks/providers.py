@@ -3,6 +3,7 @@
 from typing import Any
 
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.logging import get_logger
 
 log = get_logger("mirai.providers.mock")
@@ -28,6 +29,16 @@ class MockProvider:
     def __init__(self) -> None:
         self.call_count = 0
         self.model = "mock-model"
+
+    @property
+    def provider_name(self) -> str:
+        return "mock"
+
+    async def list_models(self) -> list[ModelInfo]:
+        return [ModelInfo(id="mock-model", name="Mock Model")]
+
+    async def get_usage(self) -> UsageSnapshot:
+        return UsageSnapshot(provider="mock", error="not supported")
 
     async def generate_response(
         self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
