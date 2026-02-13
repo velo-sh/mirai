@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 import time
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,15 @@ def _wait_for_duckdb_lock(db_path: str, timeout: float = 10.0) -> None:
 
 
 class MiraiApp:
-    """Owns all subsystem instances and their lifecycle."""
+    """Owns all subsystem instances and their lifecycle.
+
+    The ``create()`` classmethod initializes subsystems in four phases:
+
+    1. **Config & observability** — load TOML, set up logging & tracing.
+    2. **Storage** — initialize SQLite + DuckDB lock check.
+    3. **Agent stack** — registry → provider → tools → AgentLoop.
+    4. **Integrations & background** — IM, heartbeat, dreamer, refresh loop.
+    """
 
     def __init__(self) -> None:
         self.agent: AgentLoop | None = None
@@ -71,6 +80,11 @@ class MiraiApp:
         self.registry: ModelRegistry | None = None
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    # ------------------------------------------------------------------
+    # Lifecycle: public entry points
+    # ------------------------------------------------------------------
 
     @classmethod
     async def create(cls) -> "MiraiApp":
@@ -78,11 +92,56 @@ class MiraiApp:
         self = cls()
         self.start_time = time.monotonic()
 
-        # Load configuration (TOML > env vars > defaults)
+        self._init_config()
+        await self._init_storage()
+        await self._init_agent_stack()
+        await self._init_integrations()
+        self._init_background_tasks()
+
+        return self
+
+    async def shutdown(self) -> None:
+        """Gracefully shut down all subsystems."""
+        log.info("graceful_shutdown_started")
+
+        # Cancel all tracked background tasks
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            log.info("background_tasks_cancelled", count=len(self._tasks))
+            self._tasks.clear()
+
+        if self.heartbeat:
+            await self.heartbeat.stop()
+        if self.agent and hasattr(self.agent, "l3_storage") and self.agent.l3_storage:
+            try:
+                self.agent.l3_storage.close()
+            except Exception:
+                log.warning("l3_storage_close_failed", exc_info=True)
+        log.info("graceful_shutdown_complete")
+
+    def install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Register SIGTERM/SIGINT handlers for graceful shutdown."""
+
+        def _handle_signal(sig: int) -> None:
+            sig_name = signal.Signals(sig).name
+            log.info("signal_received", signal=sig_name)
+            loop.create_task(self.shutdown())
+            loop.stop()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _handle_signal, sig)
+
+    # ------------------------------------------------------------------
+    # Phase 1: Config & observability
+    # ------------------------------------------------------------------
+
+    def _init_config(self) -> None:
+        """Load configuration and set up logging + tracing."""
         self.config = MiraiConfig.load()
         config = self.config
 
-        # Setup structured logging
         json_output = os.getenv("MIRAI_LOG_FORMAT", "console") == "json"
         setup_logging(json_output=json_output, level=config.server.log_level)
 
@@ -93,18 +152,29 @@ class MiraiApp:
             port=config.server.port,
         )
 
-        # Setup OpenTelemetry tracing
         console_traces = os.getenv("OTEL_TRACES_CONSOLE", "").lower() in ("1", "true")
         setup_tracing(service_name="mirai", console=console_traces)
 
-        # Initialize SQLite tables
-        await init_db(config.database.sqlite_url)
+    # ------------------------------------------------------------------
+    # Phase 2: Storage
+    # ------------------------------------------------------------------
 
-        # Initialize Agent components
+    async def _init_storage(self) -> None:
+        """Initialize SQLite + check DuckDB lock."""
+        assert self.config is not None
+        await init_db(self.config.database.sqlite_url)
+        _wait_for_duckdb_lock(self.config.database.duckdb_path)
+
+    # ------------------------------------------------------------------
+    # Phase 3: Agent stack (registry → provider → tools → loop)
+    # ------------------------------------------------------------------
+
+    async def _init_agent_stack(self) -> None:
+        """Build the agent: registry, provider, tools, and AgentLoop."""
+        assert self.config is not None
+        config = self.config
+
         try:
-            # Check for stale DuckDB locks before connecting
-            _wait_for_duckdb_lock(config.database.duckdb_path)
-
             # Initialize model registry first to discover persisted active model
             self.registry = ModelRegistry(
                 config_provider=config.llm.provider,
@@ -151,40 +221,78 @@ class MiraiApp:
             system_tool._agent_loop = self.agent
             log.info("agent_initialized", collaborator=self.agent.name)
 
-            # Start heartbeat with optional IM integration
-            im_provider = self._create_im_provider(config)
-            if config.heartbeat.enabled:
-                self.heartbeat = HeartbeatManager(
-                    self.agent,
-                    interval_seconds=config.heartbeat.interval,
-                    im_provider=im_provider,
-                )
-                await self.heartbeat.start()
-
-            # Start Feishu WebSocket receiver
-            self._start_feishu_receiver(config)
-
-            # Send check-in card
-            await self._send_checkin(im_provider, config)
-
-            # Start Dreamer service
-            self._start_dreamer(config)
-
-            # Start model registry background refresh
-            asyncio.get_running_loop().create_task(
-                registry_refresh_loop(self.registry, interval=config.registry.refresh_interval)
-            )
-
         except Exception as e:
             log.error("agent_init_failed", error=str(e))
             self.agent = None
 
-        return self
+    # ------------------------------------------------------------------
+    # Phase 4: Integrations (IM, heartbeat, dreamer) + background tasks
+    # ------------------------------------------------------------------
 
-    async def shutdown(self) -> None:
-        """Gracefully shut down all subsystems."""
-        if self.heartbeat:
-            await self.heartbeat.stop()
+    async def _init_integrations(self) -> None:
+        """Start heartbeat, Feishu, check-in card, and dreamer."""
+        assert self.config is not None
+        config = self.config
+
+        if not self.agent:
+            return
+
+        im_provider = self._create_im_provider(config)
+
+        if config.heartbeat.enabled:
+            self.heartbeat = HeartbeatManager(
+                self.agent,
+                interval_seconds=config.heartbeat.interval,
+                im_provider=im_provider,
+            )
+            await self.heartbeat.start()
+
+        self._start_feishu_receiver(config)
+        await self._send_checkin(im_provider, config)
+        self._start_dreamer(config)
+
+    def _init_background_tasks(self) -> None:
+        """Register long-running background tasks (registry refresh, etc.)."""
+        assert self.config is not None
+        config = self.config
+
+        if not self.agent or not self.registry:
+            return
+
+        provider = self.agent.provider
+        quota_mgr = getattr(provider, "quota_manager", None)
+        self._track_task(
+            registry_refresh_loop(
+                self.registry,
+                interval=config.registry.refresh_interval,
+                quota_manager=quota_mgr,
+            ),
+            name="registry_refresh",
+        )
+
+    # ------------------------------------------------------------------
+    # Background task tracking
+    # ------------------------------------------------------------------
+
+    def _track_task(self, coro: Any, *, name: str = "unnamed") -> asyncio.Task[None]:
+        """Create and track an asyncio background task.
+
+        The task is added to ``self._tasks`` and automatically removed
+        on completion.  Exceptions are logged but never propagated.
+        """
+        task: asyncio.Task[None] = asyncio.get_running_loop().create_task(coro)
+        self._tasks.add(task)
+
+        def _done(t: asyncio.Task[None]) -> None:
+            self._tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc:
+                log.error("background_task_failed", task=name, error=str(exc))
+
+        task.add_done_callback(_done)
+        return task
 
     # ----- Private helpers -----
 

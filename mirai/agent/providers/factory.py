@@ -1,8 +1,11 @@
 """Provider factory — create the appropriate LLM provider based on configuration."""
 
-import os
-from typing import Any
+from __future__ import annotations
 
+import os
+
+from mirai.agent.providers.base import ProviderProtocol
+from mirai.errors import ProviderError
 from mirai.logging import get_logger
 
 log = get_logger("mirai.providers.factory")
@@ -13,7 +16,7 @@ def create_provider(
     model: str = "claude-sonnet-4-20250514",
     api_key: str | None = None,
     base_url: str | None = None,
-) -> Any:
+) -> ProviderProtocol:
     """Create an LLM provider based on the given configuration.
 
     Args:
@@ -24,6 +27,9 @@ def create_provider(
 
     Returns:
         A provider instance satisfying ProviderProtocol.
+
+    Raises:
+        ProviderError: If no valid credentials are found.
     """
     if provider == "antigravity":
         from mirai.agent.providers.antigravity import AntigravityProvider
@@ -54,9 +60,8 @@ def create_provider(
 
         key = api_key or os.getenv("MINIMAX_API_KEY")
         if not key:
-            raise ValueError(
-                "MiniMax provider requires an API key. "
-                "Set api_key in config or MINIMAX_API_KEY environment variable."
+            raise ProviderError(
+                "MiniMax provider requires an API key. Set api_key in config or MINIMAX_API_KEY environment variable."
             )
         log.info("provider_initialized", provider="minimax", model=model, base_url=base_url)
         return MiniMaxProvider(api_key=key, model=model, base_url=base_url)
@@ -66,14 +71,14 @@ def create_provider(
 
         key = api_key or os.getenv("OPENAI_API_KEY")
         if not key:
-            raise ValueError(
+            raise ProviderError(
                 f"Provider '{provider}' requires an API key. "
                 "Set api_key in config or OPENAI_API_KEY environment variable."
             )
         log.info("provider_initialized", provider="openai", model=model, base_url=base_url)
         return OpenAIProvider(api_key=key, model=model, base_url=base_url)
 
-    raise ValueError(
+    raise ProviderError(
         "No API credentials available. Either:\n"
         "  1. Run `python -m mirai.auth.auth_cli` for Antigravity auth, or\n"
         "  2. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable, or\n"

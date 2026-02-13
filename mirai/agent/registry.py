@@ -24,6 +24,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mirai.agent.registry_models import (
+    RegistryData,
+    RegistryModelEntry,
+    RegistryProviderData,
+)
 from mirai.logging import get_logger
 
 log = get_logger("mirai.registry")
@@ -43,21 +48,10 @@ def _import_provider_class(import_path: str) -> type | None:
         import importlib
 
         module = importlib.import_module(module_path)
-        return getattr(module, class_name)
+        return getattr(module, class_name)  # type: ignore[no-any-return]
     except Exception as exc:
         log.warning("provider_import_failed", path=import_path, error=str(exc))
         return None
-
-
-def _empty_registry() -> dict[str, Any]:
-    """Return a minimal empty registry structure."""
-    return {
-        "version": 1,
-        "last_refreshed": None,
-        "active_provider": None,
-        "active_model": None,
-        "providers": {},
-    }
 
 
 class ModelRegistry:
@@ -81,43 +75,43 @@ class ModelRegistry:
         """
         self._config_provider = config_provider
         self._config_model = config_model
-        self._data: dict[str, Any] = self._load()
+        self._data: RegistryData = self._load()
 
     # ------------------------------------------------------------------
     # Load / Save
     # ------------------------------------------------------------------
 
-    def _load(self) -> dict[str, Any]:
+    def _load(self) -> RegistryData:
         """Synchronous load from disk. Returns empty registry if missing/corrupt."""
         if not self.PATH.exists():
             log.info("registry_first_run", path=str(self.PATH))
-            data = _empty_registry()
-            # Initialize active from config.toml defaults
-            data["active_provider"] = self._config_provider
-            data["active_model"] = self._config_model
-            return data
+            return RegistryData(
+                active_provider=self._config_provider,
+                active_model=self._config_model,
+            )
 
         try:
             with open(self.PATH, encoding="utf-8") as f:
-                data = json.load(f)
+                raw = json.load(f)
+            data = RegistryData.from_dict(raw)
             log.info(
                 "registry_loaded",
                 path=str(self.PATH),
-                providers=len(data.get("providers", {})),
+                providers=len(data.providers),
             )
             return data
         except (json.JSONDecodeError, OSError) as exc:
             log.warning("registry_load_failed", error=str(exc), path=str(self.PATH))
-            data = _empty_registry()
-            data["active_provider"] = self._config_provider
-            data["active_model"] = self._config_model
-            return data
+            return RegistryData(
+                active_provider=self._config_provider,
+                active_model=self._config_model,
+            )
 
     async def _save(self) -> None:
         """Write current state to disk. Fails gracefully."""
         try:
             self.PATH.parent.mkdir(parents=True, exist_ok=True)
-            content = json.dumps(self._data, indent=2, ensure_ascii=False)
+            content = json.dumps(self._data.to_dict(), indent=2, ensure_ascii=False)
             # Atomic write: write to tmp then rename
             tmp_path = self.PATH.with_suffix(".json.tmp")
             tmp_path.write_text(content, encoding="utf-8")
@@ -141,18 +135,18 @@ class ModelRegistry:
         Uses copy-on-write: builds a new providers dict, then atomically
         swaps ``self._data``.
         """
-        new_providers: dict[str, Any] = {}
+        new_providers: dict[str, RegistryProviderData] = {}
 
         for pname, env_key, import_path in _PROVIDER_SPECS:
             api_key = os.getenv(env_key)
             if not api_key:
                 # Keep existing model info but mark unavailable
-                existing = self._data.get("providers", {}).get(pname, {})
-                new_providers[pname] = {
-                    "available": False,
-                    "env_key": env_key,
-                    "models": existing.get("models", []),
-                }
+                existing = self._data.providers.get(pname)
+                new_providers[pname] = RegistryProviderData(
+                    available=False,
+                    env_key=env_key,
+                    models=existing.models if existing else [],
+                )
                 continue
 
             # Try to instantiate provider and call list_models()
@@ -163,41 +157,43 @@ class ModelRegistry:
 
                 provider = cls(api_key=api_key)
                 models = await provider.list_models()
-                new_providers[pname] = {
-                    "available": True,
-                    "env_key": env_key,
-                    "models": [
-                        {
-                            "id": m.id,
-                            "name": m.name,
-                            "description": m.description,
-                            "reasoning": m.reasoning,
-                            "vision": getattr(m, "supports_vision", False),
-                        }
+                new_providers[pname] = RegistryProviderData(
+                    available=True,
+                    env_key=env_key,
+                    models=[
+                        RegistryModelEntry(
+                            id=m.id,
+                            name=m.name,
+                            description=m.description,
+                            reasoning=m.reasoning,
+                            vision=getattr(m, "supports_vision", False),
+                        )
                         for m in models
                     ],
-                }
+                )
                 log.info("registry_provider_refreshed", provider=pname, model_count=len(models))
             except Exception as exc:
                 log.warning("registry_refresh_failed", provider=pname, error=str(exc))
                 # Keep last known state on failure
-                existing = self._data.get("providers", {}).get(pname, {})
+                existing = self._data.providers.get(pname)
                 new_providers[pname] = (
                     existing
                     if existing
-                    else {
-                        "available": False,
-                        "env_key": env_key,
-                        "models": [],
-                    }
+                    else RegistryProviderData(
+                        available=False,
+                        env_key=env_key,
+                        models=[],
+                    )
                 )
 
         # Atomic swap (copy-on-write)
-        new_data = {
-            **self._data,
-            "last_refreshed": datetime.now(UTC).isoformat(),
-            "providers": new_providers,
-        }
+        new_data = RegistryData(
+            version=self._data.version,
+            last_refreshed=datetime.now(UTC).isoformat(),
+            active_provider=self._data.active_provider,
+            active_model=self._data.active_model,
+            providers=new_providers,
+        )
         self._data = new_data
         await self._save()
 
@@ -208,12 +204,12 @@ class ModelRegistry:
     @property
     def active_provider(self) -> str:
         """Resolve active provider: registry (runtime) > config.toml (default)."""
-        return self._data.get("active_provider") or self._config_provider or "unknown"
+        return self._data.active_provider or self._config_provider or "unknown"
 
     @property
     def active_model(self) -> str:
         """Resolve active model: registry (runtime) > config.toml (default)."""
-        return self._data.get("active_model") or self._config_model or "unknown"
+        return self._data.active_model or self._config_model or "unknown"
 
     def get_catalog_text(self, quota_data: dict[str, float] | None = None) -> str:
         """Format the full model catalog as human-readable text.
@@ -229,12 +225,10 @@ class ModelRegistry:
             f"Current model: {self.active_model}",
         ]
 
-        last_refreshed = self._data.get("last_refreshed")
-        if last_refreshed:
-            lines.append(f"Last refreshed: {last_refreshed}")
+        if self._data.last_refreshed:
+            lines.append(f"Last refreshed: {self._data.last_refreshed}")
 
-        providers = self._data.get("providers", {})
-        available_providers = {k: v for k, v in providers.items() if v.get("available")}
+        available_providers = {k: v for k, v in self._data.providers.items() if v.available}
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
@@ -245,20 +239,19 @@ class ModelRegistry:
         for pname, pdata in available_providers.items():
             is_active = pname == self.active_provider
             lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
-            models = pdata.get("models", [])
-            if not models:
+            if not pdata.models:
                 lines.append("  (no models discovered)")
                 continue
-            for m in models:
-                marker = " ← current" if (is_active and m["id"] == self.active_model) else ""
-                desc = f"  - {m['id']}: {m.get('description', m.get('name', ''))}"
-                if m.get("reasoning"):
+            for m in pdata.models:
+                marker = " ← current" if (is_active and m.id == self.active_model) else ""
+                desc = f"  - {m.id}: {m.description or m.name}"
+                if m.reasoning:
                     desc += " [reasoning]"
-                if m.get("vision"):
+                if m.vision:
                     desc += " [vision]"
                 # Annotate quota status if available
-                if quota_data and m["id"] in quota_data:
-                    pct = quota_data[m["id"]]
+                if quota_data and m.id in quota_data:
+                    pct = quota_data[m.id]
                     if pct >= 100.0:
                         desc += " ⚠️ exhausted"
                     elif pct >= 80.0:
@@ -276,18 +269,23 @@ class ModelRegistry:
 
         Returns the provider name (e.g. 'minimax', 'anthropic') or None.
         """
-        providers = self._data.get("providers", {})
-        for pname, pdata in providers.items():
-            if not pdata.get("available"):
+        for pname, pdata in self._data.providers.items():
+            if not pdata.available:
                 continue
-            for m in pdata.get("models", []):
-                if m["id"] == model_id:
+            for m in pdata.models:
+                if m.id == model_id:
                     return pname
         return None
 
     async def set_active(self, provider: str, model: str) -> None:
         """Set the active provider + model (runtime override). Persists to disk."""
-        new_data = {**self._data, "active_provider": provider, "active_model": model}
+        new_data = RegistryData(
+            version=self._data.version,
+            last_refreshed=self._data.last_refreshed,
+            active_provider=provider,
+            active_model=model,
+            providers=self._data.providers,
+        )
         self._data = new_data
         await self._save()
         log.info("registry_active_changed", provider=provider, model=model)
@@ -298,7 +296,7 @@ class ModelRegistry:
 # ---------------------------------------------------------------------------
 
 
-async def registry_refresh_loop(registry: ModelRegistry, interval: int = 300, quota_manager=None) -> None:
+async def registry_refresh_loop(registry: ModelRegistry, interval: int = 300, quota_manager: Any = None) -> None:
     """Periodically refresh the model registry in the background.
 
     Args:

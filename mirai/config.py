@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Tuple, Type
+from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_settings import (
@@ -98,9 +98,7 @@ class RegistryConfig(BaseModel):
 class TomlSource(PydanticBaseSettingsSource):
     """Custom settings source to load from TOML file using standard lib (py3.11+)."""
 
-    def get_field_value(
-        self, field: Any, field_name: str
-    ) -> Tuple[Any, str, bool]:
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
         # Not used because we return full dict in __call__
         return None, field_name, False
 
@@ -108,15 +106,16 @@ class TomlSource(PydanticBaseSettingsSource):
         # Check for override in init_kwargs or default path
         # Note: We can't easily access init_kwargs for config_path here without hacks.
         # So we stick to a global/default PATH for implicit loading.
-        # For explicit loading, users should presumably use init args, 
-        # but our load() method handles explicit paths by passing them as init args 
+        # For explicit loading, users should presumably use init args,
+        # but our load() method handles explicit paths by passing them as init args
         # (which overrides this source anyway).
         # So this source is mainly for the "implicit default file" case.
-        
+
         path = CONFIG_PATH
         if path.exists():
             try:
                 import tomllib
+
                 with open(path, "rb") as f:
                     return tomllib.load(f)
             except Exception:
@@ -153,12 +152,12 @@ class MiraiConfig(BaseSettings):
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls: Type[BaseSettings],
+        settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
             env_settings,
@@ -167,7 +166,9 @@ class MiraiConfig(BaseSettings):
         )
 
     def model_post_init(self, __context: Any) -> None:
-        """Apply legacy Feishu env var overrides after normal loading."""
+        """Apply legacy Feishu env var overrides after normal loading, then validate."""
+        import logging as _logging
+
         legacy_map = {
             "app_id": "FEISHU_APP_ID",
             "app_secret": "FEISHU_APP_SECRET",
@@ -179,28 +180,45 @@ class MiraiConfig(BaseSettings):
             if val and not getattr(self.feishu, field_name):
                 object.__setattr__(self.feishu, field_name, val)
 
+        # Cross-field validation
+        if self.llm.provider not in ("antigravity",) and not self.llm.api_key:
+            env_map = {
+                "anthropic": "ANTHROPIC_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "minimax": "MINIMAX_API_KEY",
+            }
+            provider_env_key = env_map.get(self.llm.provider)
+            if provider_env_key and not os.getenv(provider_env_key):
+                _logging.getLogger("mirai.config").warning(
+                    "Provider '%s' selected but no API key configured. "
+                    "Set llm.api_key in config.toml or %s environment variable.",
+                    self.llm.provider,
+                    provider_env_key,
+                )
+
     @classmethod
     def load(cls, config_path: Path | None = None) -> MiraiConfig:
         """Load configuration.
 
         Args:
-            config_path: Override for TOML file location. 
+            config_path: Override for TOML file location.
                          If provided, it explicitly loads it and passes as init args
                          (winning over env vars due to init args priority).
-                         To respect env vars while loading a custom file, 
+                         To respect env vars while loading a custom file,
                          we'd need a dynamic source, but for now this matches legacy behavior
                          for explicit file loading.
-                         
-                         For the default path (~/.mirai/config.toml), simple cls() 
+
+                         For the default path (~/.mirai/config.toml), simple cls()
                          uses TomlSource with correct precedence (Env > TOML).
         """
         if config_path and config_path.exists():
             import tomllib
+
             with open(config_path, "rb") as f:
                 toml_data = tomllib.load(f)
             # Flatten/map manually if needed or just pass dict
-            # We must map sections to model classes if passing as kwargs? 
+            # We must map sections to model classes if passing as kwargs?
             # No, pydantic handles dict->model conversion for nested fields.
             return cls(**toml_data)
-            
+
         return cls()

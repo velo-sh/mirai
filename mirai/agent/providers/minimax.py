@@ -16,9 +16,12 @@ Usage in config.toml::
 from __future__ import annotations
 
 import re
+from datetime import UTC
+from typing import Any
 
 import httpx
 
+from mirai.agent.models import ProviderResponse
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.agent.providers.openai import OpenAIProvider
 from mirai.logging import get_logger
@@ -104,18 +107,18 @@ class MiniMaxProvider(OpenAIProvider):
 
     @staticmethod
     def _to_provider_response(
-        response: "Any",
+        response: Any,
         model_id: str | None = None,
-    ) -> "ProviderResponse":
+    ) -> ProviderResponse:
         """Override to strip MiniMax <think> reasoning tags from content.
 
         MiniMax-M2.5 embeds chain-of-thought reasoning inside
         ``<think>...</think>`` tags in ``message.content``.  We strip
         them so the reasoning never leaks into user-facing text.
         """
-        from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
         import json
-        from typing import Any
+
+        from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 
         choice = response.choices[0]
         message = choice.message
@@ -124,9 +127,7 @@ class MiniMaxProvider(OpenAIProvider):
 
         # Strip <think>...</think> from content
         if message.content:
-            cleaned = re.sub(
-                r"<think>.*?</think>", "", message.content, flags=re.DOTALL
-            ).strip()
+            cleaned = re.sub(r"<think>.*?</think>", "", message.content, flags=re.DOTALL).strip()
             if cleaned:
                 content_blocks.append(TextBlock(text=cleaned))
 
@@ -138,9 +139,7 @@ class MiniMaxProvider(OpenAIProvider):
                     args = json.loads(tc.function.arguments)
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                content_blocks.append(
-                    ToolUseBlock(id=tc.id, name=tc.function.name, input=args)
-                )
+                content_blocks.append(ToolUseBlock(id=tc.id, name=tc.function.name, input=args))
 
         if not content_blocks:
             content_blocks.append(TextBlock())
@@ -210,9 +209,10 @@ class MiniMaxProvider(OpenAIProvider):
                     total_limit += entry.get("current_interval_total_count", 0)
                     # Use end_time from the first entry as reset_at
                     if reset_at is None and entry.get("end_time"):
-                        from datetime import datetime, timezone
+                        from datetime import datetime
+
                         ts = entry["end_time"] / 1000  # ms → s
-                        reset_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                        reset_at = datetime.fromtimestamp(ts, tz=UTC).isoformat()
                     plan = plan or entry.get("model_name")
 
                 if total_limit > 0:

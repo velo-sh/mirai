@@ -85,7 +85,7 @@ class OpenAIProvider:
             return list(self.MODEL_CATALOG)
         try:
             resp = await self.client.models.list()
-            return [ModelInfo(id=m.id, name=m.id) for m in resp]
+            return [ModelInfo(id=m.id, name=m.id) for m in resp.data]
         except Exception as exc:
             log.warning("list_models_failed", error=str(exc))
             return [ModelInfo(id=self.model, name=self.model)]
@@ -221,4 +221,3 @@ class OpenAIProvider:
             stop_reason=stop_reason,
             model_id=model_id or response.model,
         )
-
