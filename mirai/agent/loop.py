@@ -3,13 +3,13 @@ Agent Loop — the core agentic execution cycle.
 
 Implements a Think → Act → Critique loop with tool use, memory recall,
 and identity-anchored system prompts.
+
+Identity management lives in :mod:`mirai.agent.identity`.
+Prompt construction lives in :mod:`mirai.agent.prompt`.
 """
 
-import functools
 import json
-import os
 import re
-import shutil
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,7 +17,9 @@ from typing import Any
 import orjson
 from ulid import ULID
 
+from mirai.agent.identity import initialize_collaborator, load_soul, update_soul as _update_soul_fn
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.agent.prompt import build_system_prompt
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
@@ -62,18 +64,8 @@ class RefinedStep:
 CycleEvent = ThinkingStep | ToolCallStep | DraftStep | RefinedStep
 
 
-# ---------------------------------------------------------------------------
-# Module-level helper
-# ---------------------------------------------------------------------------
-
-@functools.lru_cache(maxsize=1)
-def _load_soul(collaborator_id: str) -> str:
-    """Load SOUL.md from disk (cached after first read)."""
-    soul_path = f"mirai/collaborator/{collaborator_id}_SOUL.md"
-    if os.path.exists(soul_path):
-        with open(soul_path) as f:
-            return f.read()
-    return ""
+# _load_soul is now in mirai.agent.identity (re-exported for backward compat)
+_load_soul = load_soul
 
 
 class AgentLoop:
@@ -136,19 +128,10 @@ class AgentLoop:
 
     async def _initialize(self):
         """Asynchronously load collaborator metadata and soul."""
-        from mirai.collaborator.manager import CollaboratorManager
-        from mirai.db.session import get_session
-
-        async for session in get_session():
-            manager = CollaboratorManager(session)
-            collab = await manager.get_collaborator(self.collaborator_id)
-            if collab:
-                self.name = collab.name
-                self.role = collab.role
-                self.base_system_prompt = collab.system_prompt
-            else:
-                self.name = "Unknown Collaborator"
-                self.base_system_prompt = "You are a helpful AI collaborator."
+        name, role, prompt = await initialize_collaborator(self.collaborator_id)
+        self.name = name
+        self.role = role
+        self.base_system_prompt = prompt
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] = None):
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
@@ -159,29 +142,11 @@ class AgentLoop:
         return trace_id
 
     async def update_soul(self, new_content: str) -> bool:
-        """Update the SOUL.md file with new content.
-
-        This enables autonomous evolution of the collaborator's identity.
-        """
-        soul_path = f"mirai/collaborator/{self.collaborator_id}_SOUL.md"
-        try:
-            if os.path.exists(soul_path):
-                shutil.copy2(soul_path, f"{soul_path}.bak")
-
-            with open(soul_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-
+        """Update the SOUL.md file with new content."""
+        success = await _update_soul_fn(self.collaborator_id, new_content)
+        if success:
             self.soul_content = new_content
-            # Clear cache so next load gets new content (or update manually)
-            _load_soul.cache_clear()
-            # Also update local state immediately
-            self.soul_content = new_content
-            
-            log.info("soul_updated_successfully", collaborator=self.collaborator_id)
-            return True
-        except Exception as e:
-            log.error("soul_update_failed", error=str(e))
-            return False
+        return success
 
     # ------------------------------------------------------------------
     # Shared orchestration
@@ -189,47 +154,17 @@ class AgentLoop:
 
     async def _build_system_prompt(self, msg_text: str) -> str:
         """Reload identity, recall memories, and construct the enriched system prompt."""
-        self.soul_content = _load_soul(self.collaborator_id)
-
-        # Memory recall (L2 → L3)
-        query_vector = await self.embedder.get_embeddings(msg_text)
-        memories = await self.l2_storage.search(
-            vector=query_vector, limit=3, filter=f"collaborator_id = '{self.collaborator_id}'"
+        self.soul_content = load_soul(self.collaborator_id)
+        return await build_system_prompt(
+            collaborator_id=self.collaborator_id,
+            soul_content=self.soul_content,
+            base_system_prompt=self.base_system_prompt,
+            provider=self.provider,
+            embedder=self.embedder,
+            l2_storage=self.l2_storage,
+            l3_storage=self.l3_storage,
+            msg_text=msg_text,
         )
-
-        memory_context = ""
-        if memories:
-            trace_ids = []
-            for mem in memories:
-                meta = orjson.loads(mem["metadata"])
-                if "trace_id" in meta:
-                    trace_ids.append(meta["trace_id"])
-            raw_traces = await self.l3_storage.get_traces_by_ids(trace_ids)
-            if raw_traces:
-                memory_context = "\n### Recovered Memories (L3 Raw Context):\n"
-                for trace in raw_traces:
-                    memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
-
-        # Lightweight runtime info (full model catalog is via list_models tool)
-        provider_name = getattr(self.provider, 'provider_name', 'unknown')
-        current_model = getattr(self.provider, 'model', 'unknown')
-        runtime_info = f"Provider: {provider_name} | Model: {current_model}"
-
-        # Sandwich pattern: identity → context → memories → runtime → reinforcement → rules
-        prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
-        if memory_context:
-            prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
-        prompt += f"\n\n# RUNTIME INFO\n{runtime_info}"
-        prompt += (
-            "\n\n# IDENTITY REINFORCEMENT\n"
-            "Remember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently.\n\n"
-            "# TOOL USE RULES\n"
-            "You have real tools available. When you need data (status, files, etc.), "
-            "you MUST invoke tools through the function call mechanism. "
-            "NEVER write tool results in your text response — that is fabrication. "
-            "If you want to call a tool, emit a functionCall; do NOT describe the call in prose."
-        )
-        return prompt
 
     async def _execute_tool(self, tool_call: ToolUseBlock) -> str:
         """Execute a single tool and return the result string."""
