@@ -285,7 +285,10 @@ class AgentLoop:
 
             monologue_text = think_response.text()
             await self._archive_trace(monologue_text, "thinking", {"role": "assistant"})
-            yield ThinkingStep(monologue=monologue_text)
+            try:
+                yield ThinkingStep(monologue=monologue_text)
+            except GeneratorExit:
+                return
 
             # Inject thinking into conversation so Phase 2 follows through
             monologue_wrapped = monologue_text
@@ -350,7 +353,10 @@ class AgentLoop:
 
                         result = await self._execute_tool(tool_call)
                         await self._archive_trace(str(result), "tool_result", {"tool": tool_call.name})
-                        yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
+                        try:
+                            yield ToolCallStep(name=tool_call.name, input=tool_call.input, result=result)
+                        except GeneratorExit:
+                            return
 
                         messages.append({
                             "role": "user",
@@ -374,7 +380,10 @@ class AgentLoop:
                         final_text = content
                     break
 
-            yield DraftStep(text=final_text)
+            try:
+                yield DraftStep(text=final_text)
+            except GeneratorExit:
+                return
 
             # ---- Phase 3: Critique ----
             log.info("phase_critique_start", draft_length=len(final_text))
@@ -413,6 +422,7 @@ class AgentLoop:
 
             await self._archive_trace(refined_text, "message", {"role": "assistant"})
             yield RefinedStep(text=refined_text, draft=final_text)
+
 
     # ------------------------------------------------------------------
     # Public API
