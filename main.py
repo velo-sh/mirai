@@ -72,8 +72,13 @@ app = FastAPI(lifespan=lifespan)
 @app.middleware("http")
 async def structlog_access_log(request: Request, call_next) -> Response:  # type: ignore[type-arg]
     """Log every HTTP request with method, path, status, and duration."""
+    from mirai.metrics import LatencyTimer
+
     start = time.perf_counter()
-    response: Response = await call_next(request)
+    with LatencyTimer() as timer:
+        response: Response = await call_next(request)
+        if response.status_code >= 400:
+            timer.mark_error()
     duration_ms = (time.perf_counter() - start) * 1_000
     log.info(
         "http_request",
@@ -121,11 +126,11 @@ async def health_check():
             "model": model_name,
             "quota_status": quota_status,
         }
-    except Exception as e:
+    except Exception:
         import traceback
 
         traceback.print_exc()
-        raise e
+        raise
 
 
 @app.get("/models")

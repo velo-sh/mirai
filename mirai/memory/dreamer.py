@@ -47,6 +47,8 @@ class Dreamer:
         # However, DuckDB implementation of append_trace currently doesn't update the DB after L2 write.
         # Let's fetch traces that are of type 'message' and role 'user' for now as a simple dream.
 
+        self.l3._check_conn()
+        assert self.l3.conn is not None
         unindexed_traces = self.l3.conn.execute(
             """
             SELECT * FROM cognitive_traces
@@ -56,7 +58,7 @@ class Dreamer:
         ).fetchall()
 
         # (Converting DuckDB results to dicts)
-        columns = [desc[0] for desc in self.l3.conn.description]
+        columns = [desc[0] for desc in self.l3.conn.description]  # type: ignore[union-attr]
         traces = [dict(zip(columns, row, strict=False)) for row in unindexed_traces]
 
         if not traces:

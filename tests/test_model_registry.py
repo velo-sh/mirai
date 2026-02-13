@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -13,10 +12,10 @@ import pytest
 
 from mirai.agent.providers.base import ModelInfo
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_registry_path(tmp_path: Path) -> Path:
@@ -37,8 +36,20 @@ def sample_registry_data() -> dict[str, Any]:
                 "available": True,
                 "env_key": "MINIMAX_API_KEY",
                 "models": [
-                    {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Advanced reasoning", "reasoning": True, "vision": False},
-                    {"id": "MiniMax-VL-01", "name": "MiniMax VL 01", "description": "Vision-language model", "reasoning": False, "vision": True},
+                    {
+                        "id": "MiniMax-M2.5",
+                        "name": "MiniMax M2.5",
+                        "description": "Advanced reasoning",
+                        "reasoning": True,
+                        "vision": False,
+                    },
+                    {
+                        "id": "MiniMax-VL-01",
+                        "name": "MiniMax VL 01",
+                        "description": "Vision-language model",
+                        "reasoning": False,
+                        "vision": True,
+                    },
                 ],
             },
             "anthropic": {
@@ -53,6 +64,7 @@ def sample_registry_data() -> dict[str, Any]:
 def _make_registry(path: Path, **kwargs):
     """Create a ModelRegistry with a custom path."""
     from mirai.agent.registry import ModelRegistry
+
     registry = ModelRegistry.__new__(ModelRegistry)
     registry.PATH = path  # Override class var on instance
     registry._config_provider = kwargs.get("config_provider")
@@ -67,6 +79,7 @@ def _make_registry(path: Path, **kwargs):
 def _make_registry_from_data(path: Path, data: dict, **kwargs):
     """Create a ModelRegistry pre-loaded with data."""
     from mirai.agent.registry import ModelRegistry
+
     path.write_text(json.dumps(data), encoding="utf-8")
     registry = ModelRegistry.__new__(ModelRegistry)
     registry._config_provider = kwargs.get("config_provider")
@@ -79,6 +92,7 @@ def _make_registry_from_data(path: Path, data: dict, **kwargs):
 # ===========================================================================
 # T1: Registry Lifecycle
 # ===========================================================================
+
 
 class TestRegistryLifecycle:
     """T1: Load, save, and error handling."""
@@ -132,6 +146,7 @@ class TestRegistryLifecycle:
 # T2: Config Priority Layering
 # ===========================================================================
 
+
 class TestConfigPriorityLayering:
     """T2: registry (runtime) > config.toml (default) > code default."""
 
@@ -139,7 +154,8 @@ class TestConfigPriorityLayering:
         """T2.1: Registry has no active_model, config.toml has one."""
         data = {"version": 1, "active_provider": None, "active_model": None, "providers": {}}
         registry = _make_registry_from_data(
-            tmp_registry_path, data,
+            tmp_registry_path,
+            data,
             config_provider="anthropic",
             config_model="claude-sonnet-4",
         )
@@ -155,7 +171,8 @@ class TestConfigPriorityLayering:
             "providers": {},
         }
         registry = _make_registry_from_data(
-            tmp_registry_path, data,
+            tmp_registry_path,
+            data,
             config_provider="anthropic",
             config_model="claude-sonnet-4",
         )
@@ -203,6 +220,7 @@ class TestConfigPriorityLayering:
 # T3: Refresh (Remote Discovery)
 # ===========================================================================
 
+
 class TestRefresh:
     """T3: Refresh via provider.list_models()."""
 
@@ -233,7 +251,9 @@ class TestRefresh:
         data = {"version": 1, "active_provider": "minimax", "active_model": "MiniMax-M2.5", "providers": {}}
         registry = _make_registry_from_data(tmp_registry_path, data)
 
-        with patch.dict(os.environ, {"MINIMAX_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False):
+        with patch.dict(
+            os.environ, {"MINIMAX_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False
+        ):
             # Remove keys if they exist
             for key in ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]:
                 os.environ.pop(key, None)
@@ -291,12 +311,14 @@ class TestRefresh:
 # T4: Concurrency & Performance
 # ===========================================================================
 
+
 class TestConcurrency:
     """T4: Read consistency and performance."""
 
     def test_t4_3_get_catalog_text_performance(self, tmp_registry_path: Path, sample_registry_data: dict):
         """T4.3: get_catalog_text() should be < 1ms (pure in-memory)."""
         import time
+
         registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
 
         start = time.perf_counter()
@@ -304,22 +326,25 @@ class TestConcurrency:
             registry.get_catalog_text()
         elapsed = (time.perf_counter() - start) / 1000
 
-        assert elapsed < 0.001, f"get_catalog_text() took {elapsed*1000:.3f}ms, expected < 1ms"
+        assert elapsed < 0.001, f"get_catalog_text() took {elapsed * 1000:.3f}ms, expected < 1ms"
 
 
 # ===========================================================================
 # T5: Tool Integration
 # ===========================================================================
 
+
 class TestToolIntegration:
     """T5: list_models action via SystemTool."""
 
-    def test_t5_1_list_models_returns_catalog(self, tmp_registry_path: Path, sample_registry_data: dict):
+    @pytest.mark.asyncio
+    async def test_t5_1_list_models_returns_catalog(self, tmp_registry_path: Path, sample_registry_data: dict):
         """T5.1: mirai_system(action='list_models') returns formatted table."""
         from mirai.agent.tools.system import SystemTool
+
         registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
         tool = SystemTool(registry=registry)
-        result = tool._list_models()
+        result = await tool._list_models()
         assert "minimax" in result.lower()
         assert "MiniMax-M2.5" in result
 
@@ -336,17 +361,43 @@ class TestToolIntegration:
         # Anthropic is unavailable, should NOT appear as a section header
         assert "ANTHROPIC" not in text
 
-    def test_t5_no_registry(self):
+    @pytest.mark.asyncio
+    async def test_t5_no_registry(self):
         """SystemTool with no registry returns error."""
         from mirai.agent.tools.system import SystemTool
+
         tool = SystemTool()
-        result = tool._list_models()
+        result = await tool._list_models()
         assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_t5_quota_data_wired(self, tmp_registry_path: Path, sample_registry_data: dict):
+        """Quota data from QuotaManager is passed to get_catalog_text."""
+        from mirai.agent.tools.system import SystemTool
+
+        registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
+
+        # Fake provider with a QuotaManager containing exhausted model
+        mock_qm = MagicMock()
+        mock_qm._quotas = {"MiniMax-M2.5": 100.0, "MiniMax-VL-01": 30.0}
+        mock_qm._maybe_refresh = AsyncMock()
+
+        mock_provider = MagicMock()
+        mock_provider.quota_manager = mock_qm
+
+        tool = SystemTool(registry=registry, provider=mock_provider)
+        result = await tool._list_models()
+
+        # Exhausted model should be annotated
+        assert "exhausted" in result
+        # Non-exhausted model below 80% should NOT show percentage
+        assert "30%" not in result
 
 
 # ===========================================================================
 # T6: Regression
 # ===========================================================================
+
 
 class TestRegression:
     """T6: No regression in existing functionality."""
@@ -355,9 +406,11 @@ class TestRegression:
         """T6.3: RUNTIME INFO should be lightweight, not full model list."""
         # This test verifies the loop.py change — just check the string
         # The actual loop test is in the existing test suite
-        from mirai.agent.loop import AgentLoop
         # Verify AgentLoop doesn't reference MODEL_CATALOG anymore
         import inspect
+
+        from mirai.agent.loop import AgentLoop
+
         source = inspect.getsource(AgentLoop._build_system_prompt)
         assert "MODEL_CATALOG" not in source
 
@@ -365,6 +418,7 @@ class TestRegression:
 # ===========================================================================
 # S: Model Switching (Phase 2)
 # ===========================================================================
+
 
 class TestModelSwitching:
     """S1-S5: Model switching via set_active_model."""
@@ -381,14 +435,26 @@ class TestModelSwitching:
                     "available": True,
                     "env_key": "MINIMAX_API_KEY",
                     "models": [
-                        {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Reasoning", "reasoning": True, "vision": False},
+                        {
+                            "id": "MiniMax-M2.5",
+                            "name": "MiniMax M2.5",
+                            "description": "Reasoning",
+                            "reasoning": True,
+                            "vision": False,
+                        },
                     ],
                 },
                 "anthropic": {
                     "available": True,
                     "env_key": "ANTHROPIC_API_KEY",
                     "models": [
-                        {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "description": "Fast", "reasoning": False, "vision": True},
+                        {
+                            "id": "claude-sonnet-4-20250514",
+                            "name": "Claude Sonnet 4",
+                            "description": "Fast",
+                            "reasoning": False,
+                            "vision": True,
+                        },
                     ],
                 },
             },
@@ -408,7 +474,7 @@ class TestModelSwitching:
 
         tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
 
-        with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider) as mock_factory:
+        with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider):
             result = await tool._set_active_model("claude-sonnet-4-20250514")
 
         assert "✅" in result
@@ -489,6 +555,7 @@ class TestModelSwitching:
     async def test_s_no_model_param(self, switching_registry):
         """set_active_model with no model → error."""
         from mirai.agent.tools.system import SystemTool
+
         tool = SystemTool(registry=switching_registry)
         result = await tool._set_active_model(None)
         assert "Error" in result

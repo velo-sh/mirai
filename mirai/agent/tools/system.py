@@ -20,13 +20,17 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]  # Python <3.11 backport
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.logging import get_logger
+
+if TYPE_CHECKING:
+    from mirai.agent.loop import AgentLoop
+    from mirai.agent.registry import ModelRegistry
 
 log = get_logger("mirai.tools.system")
 
@@ -72,8 +76,8 @@ class SystemTool(BaseTool):
         config: Any | None = None,
         start_time: float | None = None,
         provider: ProviderProtocol | None = None,
-        registry: Any | None = None,
-        agent_loop: Any | None = None,
+        registry: ModelRegistry | None = None,
+        agent_loop: AgentLoop | None = None,
     ):
         self._config = config
         self._start_time = start_time or time.monotonic()
@@ -171,7 +175,7 @@ class SystemTool(BaseTool):
             except Exception:
                 log.warning("quota_refresh_failed_in_list_models")
             quota_data = dict(qm._quotas)  # use stale data on refresh failure
-        return self._registry.get_catalog_text(quota_data=quota_data)
+        return str(self._registry.get_catalog_text(quota_data=quota_data))
 
     # ------------------------------------------------------------------
     # Action: set_active_model

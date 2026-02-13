@@ -84,7 +84,7 @@ def _install_context_detach_fix():
         except ValueError:
             pass
 
-    _RUNTIME_CONTEXT.__class__.detach = _safe_detach
+    _RUNTIME_CONTEXT.__class__.detach = _safe_detach  # type: ignore[method-assign]
 
 
 _install_context_detach_fix()

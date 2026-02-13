@@ -8,6 +8,7 @@ Identity management lives in :mod:`mirai.agent.identity`.
 Prompt construction lives in :mod:`mirai.agent.prompt`.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
+from mirai.errors import ProviderError
 from mirai.logging import get_logger
 from mirai.memory.vector_db import VectorStore
 from mirai.tracing import get_tracer
@@ -256,10 +258,14 @@ class AgentLoop:
                     response: ProviderResponse | None = None
                     models_to_try = [model] + [m for m in self.fallback_models if m != model]
                     last_error: Exception | None = None
-                    for attempt_model in models_to_try:
+                    for attempt_idx, attempt_model in enumerate(models_to_try):
+                        if attempt_idx > 0:
+                            backoff = min(0.5 * attempt_idx, 5.0)
+                            log.info("fallback_backoff", seconds=backoff, attempt=attempt_idx)
+                            await asyncio.sleep(backoff)
                         try:
                             response = await self.provider.generate_response(
-                                model=attempt_model,
+                                model=str(attempt_model),
                                 system=full_system_prompt,
                                 messages=messages,
                                 tools=tool_definitions,
@@ -277,7 +283,9 @@ class AgentLoop:
                                 remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
                             )
                     if response is None:
-                        raise last_error or RuntimeError("All models in fallback chain failed")
+                        if last_error is not None:
+                            raise ProviderError("All models in fallback chain failed") from last_error
+                        raise ProviderError("All models in fallback chain failed")
                     log.info(
                         "llm_response",
                         stop_reason=response.stop_reason,

@@ -399,7 +399,8 @@ class TestFallbackChainEdgeCases:
 
     @pytest.mark.asyncio
     async def test_empty_fallback_list_primary_fails(self):
-        """No fallback models configured + primary fails → RuntimeError."""
+        """No fallback models configured + primary fails → ProviderError wrapping original."""
+        from mirai.errors import ProviderError
 
         provider = MagicMock()
 
@@ -412,7 +413,7 @@ class TestFallbackChainEdgeCases:
         loop = self._make_loop(provider, fallback_models=[])
         loop._build_system_prompt = AsyncMock(return_value="system")
 
-        with pytest.raises(RuntimeError, match="Primary down"):
+        with pytest.raises(ProviderError, match="All models in fallback chain failed"):
             async for _ in loop._execute_cycle("Hello", model="primary"):
                 pass
 
@@ -544,7 +545,9 @@ class TestOpenAIRemoteDiscovery:
         from mirai.agent.providers.openai import OpenAIProvider
 
         p = OpenAIProvider(api_key="test-key", model="gpt-4o")
-        p.client.models.list = AsyncMock(return_value=[])
+        mock_resp = MagicMock()
+        mock_resp.data = []
+        p.client.models.list = AsyncMock(return_value=mock_resp)
         models = await p.list_models()
 
         # Empty response → should still return something usable
@@ -562,7 +565,9 @@ class TestOpenAIRemoteDiscovery:
             mock_models.append(m)
 
         p = OpenAIProvider(api_key="test-key", model="gpt-4o")
-        p.client.models.list = AsyncMock(return_value=mock_models)
+        mock_resp = MagicMock()
+        mock_resp.data = mock_models
+        p.client.models.list = AsyncMock(return_value=mock_resp)
         models = await p.list_models()
 
         assert len(models) == 3
@@ -720,8 +725,10 @@ class TestDuckDBStorageClose:
         storage = DuckDBStorage(db_path=db_path)
         storage.close()
 
-        # Attempt to write after close should raise RuntimeError
-        with pytest.raises(RuntimeError, match="DuckDB connection is closed"):
+        # Attempt to write after close should raise StorageError
+        from mirai.errors import StorageError
+
+        with pytest.raises(StorageError, match="DuckDB connection is closed"):
             await storage.append_trace(id="test", collaborator_id="c1", trace_type="message", content="after close")
 
 

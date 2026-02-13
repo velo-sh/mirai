@@ -5,9 +5,11 @@ Routes Claude/Gemini API calls through the v1internal:streamGenerateContent
 endpoint at cloudcode-pa.googleapis.com.
 """
 
+from __future__ import annotations
+
 import random
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import orjson
@@ -23,6 +25,9 @@ from mirai.agent.providers.message_converter import convert_messages, convert_to
 from mirai.agent.providers.quota import QuotaManager
 from mirai.logging import get_logger
 from mirai.tracing import get_tracer
+
+if TYPE_CHECKING:
+    from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 
 log = get_logger("mirai.providers.antigravity")
 
@@ -125,7 +130,7 @@ class AntigravityProvider:
     def provider_name(self) -> str:
         return "antigravity"
 
-    async def list_models(self) -> list["ModelInfo"]:
+    async def list_models(self) -> list[ModelInfo]:
         """Return models available through Antigravity (Cloud Code Assist)."""
         from mirai.agent.providers.base import ModelInfo
 
@@ -143,7 +148,7 @@ class AntigravityProvider:
             ),
         ]
 
-    async def get_usage(self) -> "UsageSnapshot":
+    async def get_usage(self) -> UsageSnapshot:
         """Usage query not supported for Antigravity."""
         from mirai.agent.providers.base import UsageSnapshot
 
