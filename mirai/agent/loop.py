@@ -199,27 +199,16 @@ class AgentLoop:
                 for trace in raw_traces:
                     memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
 
-        # Build model catalog section so the agent knows its own capabilities
-        model_catalog = ""
-        if hasattr(self.provider, 'MODEL_CATALOG'):
-            provider_name = getattr(self.provider, 'provider_name', 'unknown')
-            current_model = getattr(self.provider, 'model', 'unknown')
-            lines = [f"Provider: {provider_name}", f"Current model: {current_model}", "Available models:"]
-            for m in self.provider.MODEL_CATALOG:
-                desc = f"  - **{m.id}**: {m.description}"
-                if m.reasoning:
-                    desc += " (reasoning)"
-                if m.supports_vision:
-                    desc += " (vision)"
-                lines.append(desc)
-            model_catalog = "\n".join(lines)
+        # Lightweight runtime info (full model catalog is via list_models tool)
+        provider_name = getattr(self.provider, 'provider_name', 'unknown')
+        current_model = getattr(self.provider, 'model', 'unknown')
+        runtime_info = f"Provider: {provider_name} | Model: {current_model}"
 
-        # Sandwich pattern: identity → context → memories → models → reinforcement → rules
+        # Sandwich pattern: identity → context → memories → runtime → reinforcement → rules
         prompt = f"# IDENTITY\n{self.soul_content}\n\n# CONTEXT\n{self.base_system_prompt}"
         if memory_context:
             prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
-        if model_catalog:
-            prompt += f"\n\n# RUNTIME INFO\n{model_catalog}"
+        prompt += f"\n\n# RUNTIME INFO\n{runtime_info}"
         prompt += (
             "\n\n# IDENTITY REINFORCEMENT\n"
             "Remember, you are operating as defined in the SOUL.md section above. Maintain your persona consistently.\n\n"
