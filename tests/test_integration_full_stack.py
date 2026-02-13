@@ -19,9 +19,14 @@ from mirai.agent.tools.workspace import WorkspaceTool
 
 def _create_real_agent():
     """Create a real AgentLoop with MockProvider — no DB dependency."""
+    from mirai.db.duck import DuckDBStorage
+
     provider = MockProvider()
     tools = [EchoTool(), WorkspaceTool()]
-    agent = AgentLoop(provider, tools, collaborator_id="integration-test")
+    agent = AgentLoop(
+        provider, tools, collaborator_id="integration-test",
+        l3_storage=DuckDBStorage(db_path=":memory:"),
+    )
     agent.name = "IntegrationTestBot"
     agent.role = "test"
     agent.base_system_prompt = "You are a test agent."

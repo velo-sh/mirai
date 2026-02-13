@@ -9,6 +9,7 @@ In development, spans are printed to the console.
 
 from __future__ import annotations
 
+import atexit
 import os
 from functools import wraps
 from typing import Any
@@ -16,7 +17,11 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    ConsoleSpanExporter,
+    SimpleSpanProcessor,
+)
 
 _tracer: trace.Tracer | None = None
 
@@ -35,7 +40,10 @@ def setup_tracing(service_name: str = "mirai", console: bool = False) -> None:
     provider = TracerProvider(resource=resource)
 
     if console or os.getenv("OTEL_TRACES_CONSOLE", "").lower() in ("1", "true"):
-        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+        # SimpleSpanProcessor exports synchronously — avoids
+        # "I/O operation on closed file" when stdout is closed before
+        # BatchSpanProcessor's background thread flushes.
+        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     else:
         # Try OTLP exporter if endpoint is configured
         otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -47,10 +55,13 @@ def setup_tracing(service_name: str = "mirai", console: bool = False) -> None:
                 provider.add_span_processor(BatchSpanProcessor(exporter))
             except ImportError:
                 # OTLP exporter not installed, fall back to console
-                provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+                provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
 
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer(service_name)
+
+    # Ensure spans are flushed before process exit
+    atexit.register(provider.shutdown)
 
 
 # Suppress the harmless "Failed to detach context" error that occurs

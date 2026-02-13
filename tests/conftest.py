@@ -29,3 +29,13 @@ def tmp_db_paths(tmp_path):
         "sqlite_url": f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
         "duckdb_path": str(tmp_path / "test.duckdb"),
     }
+
+
+@pytest.fixture
+def duckdb_storage():
+    """Create an in-memory DuckDBStorage — no file lock conflicts."""
+    from mirai.db.duck import DuckDBStorage
+
+    storage = DuckDBStorage(db_path=":memory:")
+    yield storage
+    storage.close()
