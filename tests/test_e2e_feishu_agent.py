@@ -127,7 +127,20 @@ class TestFeishuAgentE2E:
             )
             return FakeFeishuReplyResponse(f"om_reply_{len(feishu_calls)}")
 
+        async def mock_acreate(request):
+            """Captures reaction calls."""
+            feishu_calls.append(
+                {
+                    "action": "reaction",
+                    "message_id": request.message_id,
+                    "text": "Thinking",  # Proxy for emoji reaction
+                }
+            )
+            return FakeFeishuReplyResponse()
+
         mock_reply_client.im.v1.message.areply = mock_areply
+        from unittest.mock import AsyncMock
+        mock_reply_client.im.v1.message_reaction.acreate = mock_acreate
 
         # Build receiver with real AgentLoop as handler
         async def handle_message(sender_id: str, text: str, chat_id: str, history: list) -> str:
@@ -158,11 +171,11 @@ class TestFeishuAgentE2E:
             f"Expected 2 Feishu API calls (typing + reply), got {len(feishu_calls)}: {feishu_calls}"
         )
 
-        # Call 1: typing indicator
+        # Call 1: typing indicator (now a reaction)
         typing_call = feishu_calls[0]
-        assert typing_call["action"] == "reply"
+        assert typing_call["action"] == "reaction", f"Expected reaction, got {typing_call['action']}"
         assert typing_call["message_id"] == "om_original_msg_001"
-        assert "Thinking" in typing_call["text"], f"First reply should be typing indicator, got: {typing_call['text']}"
+        assert "Thinking" in typing_call["text"]
 
         # Call 2: real LLM response (not empty, not "Thinking...")
         reply_call = feishu_calls[1]
@@ -181,8 +194,6 @@ class TestFeishuAgentE2E:
         agent = _create_agent()
         timestamps: list[tuple[str, float]] = []
 
-        mock_client = MagicMock()
-
         async def mock_areply(request):
             body = request.request_body
             content = orjson.loads(body.content)
@@ -191,7 +202,23 @@ class TestFeishuAgentE2E:
             timestamps.append((label, time.monotonic()))
             return FakeFeishuReplyResponse()
 
-        mock_client.im.v1.message.areply = mock_areply
+        async def mock_acreate(request):
+            timestamps.append(("typing", time.monotonic()))
+            return FakeFeishuReplyResponse()
+
+        mock_client = MagicMock()
+        mock_im = MagicMock()
+        mock_v1 = MagicMock()
+        mock_msg = MagicMock()
+        mock_reaction = MagicMock()
+        
+        mock_msg.areply = mock_areply
+        mock_reaction.acreate = mock_acreate
+        
+        mock_v1.message = mock_msg
+        mock_v1.message_reaction = mock_reaction
+        mock_im.v1 = mock_v1
+        mock_client.im = mock_im
 
         async def handler(sender_id, text, chat_id, history):
             timestamps.append(("llm_start", time.monotonic()))
@@ -228,8 +255,24 @@ class TestFeishuAgentE2E:
             replies.append(content.get("text", ""))
             return FakeFeishuReplyResponse()
 
-        mock_client.im.v1.message.areply = mock_areply
+        async def mock_acreate(request):
+            replies.append("Thinking")
+            return FakeFeishuReplyResponse()
 
+        mock_client = MagicMock()
+        mock_im = MagicMock()
+        mock_v1 = MagicMock()
+        mock_msg = MagicMock()
+        mock_reaction = MagicMock()
+
+        mock_msg.areply = mock_areply
+        mock_reaction.acreate = mock_acreate
+
+        mock_v1.message = mock_msg
+        mock_v1.message_reaction = mock_reaction
+        mock_im.v1 = mock_v1
+        mock_client.im = mock_im
+    
         async def exploding_handler(sender_id, text, chat_id, history):
             raise RuntimeError("LLM service unavailable")
 

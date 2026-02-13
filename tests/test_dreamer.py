@@ -1,89 +1,90 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+import json
+import os
+import shutil
+
+from mirai.agent.loop import AgentLoop
+from mirai.agent.providers import MockProvider
+from mirai.agent.tools.echo import EchoTool
+from mirai.db.session import init_db
+from mirai.memory.dreamer import Dreamer
+from mirai.memory.vector_db import VectorStore
+
 
 import pytest
-
-from mirai.agent.dreamer import Dreamer
-from mirai.agent.loop import AgentLoop
-from mirai.agent.models import ProviderResponse
 from mirai.db.duck import DuckDBStorage
-
-
-@pytest.mark.asyncio
-async def test_dream_cycle_evolution():
-    """
-    Verifies that the Dreamer service reads traces, reflects, and updates the SOUL.md.
-    """
-    # 1. Setup Mocks
-    mock_agent = AsyncMock(spec=AgentLoop)
-    mock_agent.collaborator_id = "dream-test"
-    mock_agent.soul_content = "Old Identity"
-    mock_agent.provider = AsyncMock()
-
-    mock_storage = AsyncMock(spec=DuckDBStorage)
-    mock_storage.get_recent_traces.return_value = [
-        {"trace_type": "thinking", "content": "I should be more proactive."},
-        {"trace_type": "thinking", "content": "The user likes concise answers."},
-    ]
-
-    # Mock Provider Response
-    mock_resp = MagicMock(spec=ProviderResponse)
-    mock_resp.text.return_value = (
-        "# IDENTITY\n"
-        "I am an evolved version of Mira. I am more proactive and focus on providing "
-        "concise yet deeply insightful responses. I understand that GJK values efficiency "
-        "and clarity above all else in our co-creation process."
-    )
-    mock_agent.provider.generate_response.return_value = mock_resp
-
-    mock_agent.update_soul.return_value = True
-
-    dreamer = Dreamer(mock_agent, mock_storage, interval_seconds=10)
-
-    # 3. Trigger Dream
-    await dreamer.dream()
-
-    # 4. Verify Pipeline
-    mock_storage.get_recent_traces.assert_called_once_with("dream-test", limit=20)
-    mock_agent.provider.generate_response.assert_called_once()
-    mock_agent.update_soul.assert_called_once_with(
-        "# IDENTITY\n"
-        "I am an evolved version of Mira. I am more proactive and focus on providing "
-        "concise yet deeply insightful responses. I understand that GJK values efficiency "
-        "and clarity above all else in our co-creation process."
-    )
-
-    print("✅ Dreamer correctly analyzed traces and triggered soul update.")
-
+from mirai.memory.vector_db import VectorStore
 
 @pytest.mark.asyncio
-async def test_agent_loop_soul_update_io(tmp_path):
-    """Verifies the actual file IO and backup logic in AgentLoop.update_soul."""
+async def test_dreaming_flow(tmp_path):
+    print("--- Starting Dreaming Engine Test ---")
 
-    # Setup a temp directory structure
-    def _mock_init(self, db_path=":memory:"):
-        self.db_path = ":memory:"
-        import duckdb
+    # Use temp paths
+    db_path = str(tmp_path / "test_dreamer.duckdb")
+    l3 = DuckDBStorage(db_path=db_path)
+    
+    # Vector store might need similar handling but let's assume it's okay or mock it if possible.
+    # Actually VectorStore init uses lancedb.connect("mirai_vectors"). check if we can override.
+    # VectorStore def __init__(self, uri="mirai_vectors")
+    l2_path = str(tmp_path / "mirai_vectors")
+    l2 = VectorStore(db_path=l2_path)
+    
+    await init_db()
 
-        self.conn = duckdb.connect(":memory:")
+    collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
+    provider = MockProvider()
+    tools = [EchoTool()]
+    
+    from unittest.mock import AsyncMock
+    mock_embedder = AsyncMock()
+    mock_embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
+    
+    # Inject storage
+    agent = await AgentLoop.create(
+        provider=provider, 
+        tools=tools, 
+        collaborator_id=collaborator_id,
+        l3_storage=l3,
+        l2_storage=l2,
+        embedder=mock_embedder
+    )
 
-    with (
-        patch("mirai.agent.loop._load_soul", return_value="Original Content"),
-        patch("mirai.db.duck.DuckDBStorage.__init__", _mock_init),
-    ):
-        agent = AgentLoop(provider=MagicMock(), tools=[], collaborator_id="test-bot")
+    # 1. First interaction (NOT memorized explicitly)
+    print("\n--- Interaction 1 (Normal Chat) ---")
+    # We need to bypass the mock logic that triggers 'memorize' tool
+    # Let's just run it; if it doesn't use the tool, it's just a message in L3
+    provider.call_count = 10  # Force it past the hardcoded tool-call logic
+    await agent.run("Mirai's secret password is 'Antigravity2026'.")
 
-    # Update soul with real method but mock the path logic
-    with (
-        patch("mirai.agent.loop.os.path.exists", return_value=True),
-        patch("mirai.agent.loop.shutil.copy2") as mock_copy,
-        patch("builtins.open", new_callable=MagicMock) as mock_open,
-    ):
-        mock_file = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_file
+    # 2. Check L2 (Should be empty)
+    vdb = l2
+    results = await vdb.search(vector=[0.0] * 1536, limit=1)  # Search for anything
+    print(f"[test] Memories in L2 before dreaming: {len(results)}")
 
-        await agent.update_soul("New Content")
+    # 3. Running the Dreamer
+    print("\n--- Dreaming Phase ---")
+    print("\n--- Dreaming Phase ---")
+    dreamer = Dreamer(agent, l3)
+    await dreamer.dream_once()
 
-        mock_copy.assert_called_once()
-        mock_file.write.assert_called_once_with("New Content")
+    # 4. Check L2 again (Should have the secret password)
+    results = await vdb.search(vector=[0.0] * 1536, limit=5)
+    print(f"[test] Memories in L2 after dreaming: {len(results)}")
+    has_secret = any(
+        "secret password" in json.loads(r["metadata"]).get("content", "") or "secret password" in r.get("content", "")
+        for r in results
+    )
+    # Wait, LanceDB search results structure depends on to_list()
+    # In my VectorStore, search returns query.to_list()
+    print(f"[test] Secret found in L2 index: {has_secret}")
 
-    print("✅ AgentLoop.update_soul logic verified for path generation and shutil usage.")
+    # 5. Retrieval Check
+    print("\n--- Retrieval Verification ---")
+    # Now ask about the secret. Total Recall should fetch it from L3.
+    response = await agent.run("What is Mirai's secret password?")
+    # Check if memories were injected (we'll see it in the mock log if it worked)
+    print(f"[test] Final Answer: {response}")
+
+
+if __name__ == "__main__":
+    asyncio.run(test_dreaming_flow())

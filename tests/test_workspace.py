@@ -6,15 +6,33 @@ from mirai.agent.tools.workspace import WorkspaceTool
 from mirai.db.session import init_db
 
 
+import pytest
+import pytest_asyncio
+from unittest.mock import AsyncMock
+
+@pytest_asyncio.fixture(autouse=True)
+async def setup_db():
+    await init_db()
+
+@pytest.mark.asyncio
 async def test_workspace():
     print("--- Starting Workspace Tool Test ---")
-    await init_db()
 
     # Initialize components
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [WorkspaceTool()]
-    agent = await AgentLoop.create(provider=provider, tools=tools, collaborator_id=collaborator_id)
+    
+    # Use mocks
+    agent = await AgentLoop.create(
+        provider=provider, 
+        tools=tools, 
+        collaborator_id=collaborator_id,
+        l3_storage=AsyncMock(),
+        l2_storage=AsyncMock(),
+        embedder=AsyncMock()
+    )
+    agent.embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
 
     # Test 'list' action
     print("\n[test] Requesting file list...")

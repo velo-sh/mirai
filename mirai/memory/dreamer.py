@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.db.duck import DuckDBStorage
@@ -14,11 +15,23 @@ class Dreamer:
     Background process that consolidates raw L3 traces into L2 semantic indices.
     """
 
-    def __init__(self, collaborator_id: str):
-        self.collaborator_id = collaborator_id
-        self.l3 = DuckDBStorage()
-        self.l2 = VectorStore()
-        self.embedder = MockEmbeddingProvider()
+    def __init__(
+        self,
+        agent_or_id: str | Any,
+        l3_storage: DuckDBStorage | None = None,
+        l2_storage: VectorStore | None = None,
+        embedder: Any | None = None,
+        interval_seconds: int = 3600,
+    ):
+        if isinstance(agent_or_id, str):
+            self.collaborator_id = agent_or_id
+        else:
+            self.collaborator_id = agent_or_id.collaborator_id
+
+        self.l3 = l3_storage or DuckDBStorage()
+        self.l2 = l2_storage or VectorStore()
+        self.embedder = embedder or MockEmbeddingProvider()
+        self.interval_seconds = interval_seconds
 
     async def dream_once(self):
         """
