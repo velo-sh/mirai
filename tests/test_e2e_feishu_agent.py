@@ -18,6 +18,7 @@ All Feishu SDK HTTP calls are mocked; the AgentLoop pipeline is real
 (backed by MockProvider).
 """
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -37,6 +38,7 @@ def _init_memory(self, db_path=":memory:"):
     """Replacement __init__ for DuckDBStorage that uses in-memory DB."""
     self.db_path = ":memory:"
     self.conn = duckdb.connect(":memory:")
+    self._lock = threading.Lock()
     self._init_schema()
 
 

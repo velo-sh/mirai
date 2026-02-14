@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 import pytest
 
@@ -35,6 +36,7 @@ async def test_executive_multi_step_workflow(monkeypatch):
         import duckdb
 
         self.conn = duckdb.connect(db_path)
+        self._lock = threading.Lock()
         self._init_schema()
 
     monkeypatch.setattr(DuckDBStorage, "__init__", mock_duck_init)
