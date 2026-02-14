@@ -188,6 +188,11 @@ class MiraiApp:
 
             self.registry.set_enrichment_source(ModelsDevSource())
 
+            # Wire free-provider discovery source (OpenRouter, SambaNova, etc.)
+            from mirai.agent.free_providers import FreeProviderSource
+
+            self.registry.set_free_source(FreeProviderSource())
+
             # Use persisted active model/provider if available, fall back to config
             effective_provider = self.registry.active_provider
             effective_model = self.registry.active_model
@@ -292,6 +297,12 @@ class MiraiApp:
             name="registry_refresh",
         )
 
+        # Periodic health checks for configured free providers
+        self._track_task(
+            _health_check_loop(self.registry, interval=600),
+            name="provider_health_check",
+        )
+
     # ------------------------------------------------------------------
     # Background task tracking
     # ------------------------------------------------------------------
@@ -315,3 +326,39 @@ class MiraiApp:
 
         task.add_done_callback(_done)
         return task
+
+
+# ---------------------------------------------------------------------------
+# Health check background loop (runs outside MiraiApp)
+# ---------------------------------------------------------------------------
+
+
+async def _health_check_loop(
+    registry: ModelRegistry,
+    interval: int = 600,
+) -> None:
+    """Periodically probe configured free providers and update registry.
+
+    Args:
+        registry: The ModelRegistry instance to update.
+        interval: Seconds between health checks (default: 10 minutes).
+    """
+    from mirai.agent.free_providers import check_provider_health
+
+    # Initial probe shortly after startup (let registry refresh settle first)
+    await asyncio.sleep(30)
+
+    while True:
+        try:
+            health = await check_provider_health()
+            if health:
+                registry.update_health(health)
+                log.info(
+                    "provider_health_check_complete",
+                    checked=len(health),
+                    healthy=sum(1 for h in health.values() if h.healthy),
+                )
+        except Exception as exc:
+            log.warning("provider_health_check_failed", error=str(exc))
+
+        await asyncio.sleep(interval)
