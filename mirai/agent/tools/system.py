@@ -28,7 +28,12 @@ from mirai.agent.tools.base import BaseTool, ToolContext
 from mirai.logging import get_logger
 
 if TYPE_CHECKING:
-    pass
+    from mirai.agent.agent_loop import AgentLoop
+    from mirai.agent.providers.base import ProviderProtocol
+    from mirai.agent.registry import ModelRegistry
+    from mirai.agent.tools.base import ToolContext
+    from mirai.config import MiraiConfig
+    from mirai.db.duck import DuckDBStorage
 
 log = get_logger("mirai.tools.system")
 
@@ -69,7 +74,33 @@ def _serialize_toml(data: dict[str, Any]) -> str:
 class SystemTool(BaseTool):
     """Self-evolution tool: status, patch_config, restart."""
 
-    def __init__(self, context: ToolContext | None = None):
+    def __init__(
+        self,
+        context: ToolContext | None = None,
+        config: MiraiConfig | None = None,
+        registry: ModelRegistry | None = None,
+        agent_loop: AgentLoop | None = None,
+        provider: ProviderProtocol | None = None,
+        storage: DuckDBStorage | None = None,
+        start_time: float | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if context is None and any(
+            v is not None for v in (config, registry, agent_loop, provider, storage, start_time)
+        ):
+            # Legacy support for tests that pass components individually
+            import time
+
+            from mirai.agent.tools.base import ToolContext
+
+            context = ToolContext(
+                config=config,
+                storage=storage or kwargs.get("storage"),
+                agent_loop=agent_loop or kwargs.get("agent") or kwargs.get("agent_loop"),
+                registry=registry or kwargs.get("registry"),
+                provider=provider or kwargs.get("provider"),
+                start_time=start_time if start_time is not None else time.time(),
+            )
         super().__init__(context)
         # Convenience aliases
         self._config = self.context.config

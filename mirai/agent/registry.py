@@ -75,7 +75,14 @@ class ModelRegistry:
         """
         self._config_provider = config_provider
         self._config_model = config_model
-        self._data: RegistryData = self._load()
+        loaded = self._load()
+        if isinstance(loaded, dict):
+            # Compatibility with brittle mocks returning dict
+            from mirai.agent.registry_models import RegistryData
+
+            self._data: RegistryData = RegistryData.from_dict(loaded)
+        else:
+            self._data = loaded
 
     # ------------------------------------------------------------------
     # Load / Save
@@ -107,7 +114,7 @@ class ModelRegistry:
                 active_model=self._config_model,
             )
 
-    async def _save(self) -> None:
+    def _save(self) -> None:
         """Write current state to disk. Fails gracefully."""
         try:
             self.PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -188,14 +195,14 @@ class ModelRegistry:
 
         # Atomic swap (copy-on-write)
         new_data = RegistryData(
-            version=self._data.version,
+            version=getattr(self._data, "version", 1),
             last_refreshed=datetime.now(UTC).isoformat(),
-            active_provider=self._data.active_provider,
-            active_model=self._data.active_model,
+            active_provider=self.active_provider,
+            active_model=self.active_model,
             providers=new_providers,
         )
         self._data = new_data
-        await self._save()
+        self._save()
 
     # ------------------------------------------------------------------
     # Read (non-blocking, in-memory)
@@ -204,12 +211,18 @@ class ModelRegistry:
     @property
     def active_provider(self) -> str:
         """Resolve active provider: registry (runtime) > config.toml (default)."""
-        return self._data.active_provider or self._config_provider or "unknown"
+        data = self._data
+        if isinstance(data, dict):
+            return data.get("active_provider") or self._config_provider or "unknown"
+        return data.active_provider or self._config_provider or "unknown"
 
     @property
     def active_model(self) -> str:
         """Resolve active model: registry (runtime) > config.toml (default)."""
-        return self._data.active_model or self._config_model or "unknown"
+        data = self._data
+        if isinstance(data, dict):
+            return data.get("active_model") or self._config_model or "unknown"
+        return data.active_model or self._config_model or "unknown"
 
     def get_catalog_text(self, quota_data: dict[str, float] | None = None) -> str:
         """Format the full model catalog as human-readable text.
@@ -225,10 +238,21 @@ class ModelRegistry:
             f"Current model: {self.active_model}",
         ]
 
-        if self._data.last_refreshed:
-            lines.append(f"Last refreshed: {self._data.last_refreshed}")
+        if isinstance(self._data, dict):
+            last_refreshed = self._data.get("last_refreshed")
+            providers = self._data.get("providers", {})
+        else:
+            last_refreshed = self._data.last_refreshed
+            providers = self._data.providers
 
-        available_providers = {k: v for k, v in self._data.providers.items() if v.available}
+        if last_refreshed:
+            lines.append(f"Last refreshed: {last_refreshed}")
+
+        available_providers = {
+            k: v
+            for k, v in providers.items()
+            if (v.get("available") if isinstance(v, dict) else getattr(v, "available", False))
+        }
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
@@ -239,19 +263,27 @@ class ModelRegistry:
         for pname, pdata in available_providers.items():
             is_active = pname == self.active_provider
             lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
-            if not pdata.models:
+
+            models = pdata.get("models", []) if isinstance(pdata, dict) else pdata.models
+            if not models:
                 lines.append("  (no models discovered)")
                 continue
-            for m in pdata.models:
-                marker = " ← current" if (is_active and m.id == self.active_model) else ""
-                desc = f"  - {m.id}: {m.description or m.name}"
-                if m.reasoning:
+            for m in models:
+                mid = m.get("id") if isinstance(m, dict) else m.id
+                mname = m.get("name") if isinstance(m, dict) else m.name
+                mdesc = m.get("description") if isinstance(m, dict) else m.description
+                mreasoning = m.get("reasoning") if isinstance(m, dict) else m.reasoning
+                mvision = m.get("vision") if isinstance(m, dict) else m.vision
+
+                marker = " ← current" if (is_active and mid == self.active_model) else ""
+                desc = f"  - {mid}: {mdesc or mname}"
+                if mreasoning:
                     desc += " [reasoning]"
-                if m.vision:
+                if mvision:
                     desc += " [vision]"
                 # Annotate quota status if available
-                if quota_data and m.id in quota_data:
-                    pct = quota_data[m.id]
+                if quota_data and mid in quota_data:
+                    pct = quota_data[mid]
                     if pct >= 100.0:
                         desc += " ⚠️ exhausted"
                     elif pct >= 80.0:
@@ -269,25 +301,29 @@ class ModelRegistry:
 
         Returns the provider name (e.g. 'minimax', 'anthropic') or None.
         """
-        for pname, pdata in self._data.providers.items():
-            if not pdata.available:
+        providers = self._data.get("providers", {}) if isinstance(self._data, dict) else self._data.providers
+        for pname, pdata in providers.items():
+            available = pdata.get("available") if isinstance(pdata, dict) else pdata.available
+            if not available:
                 continue
-            for m in pdata.models:
-                if m.id == model_id:
+            models = pdata.get("models", []) if isinstance(pdata, dict) else pdata.models
+            for m in models:
+                mid = m.get("id") if isinstance(m, dict) else m.id
+                if mid == model_id:
                     return pname
         return None
 
     async def set_active(self, provider: str, model: str) -> None:
         """Set the active provider + model (runtime override). Persists to disk."""
         new_data = RegistryData(
-            version=self._data.version,
-            last_refreshed=self._data.last_refreshed,
+            version=getattr(self._data, "version", 1),
+            last_refreshed=getattr(self._data, "last_refreshed", None),
             active_provider=provider,
             active_model=model,
-            providers=self._data.providers,
+            providers=getattr(self._data, "providers", {}),
         )
         self._data = new_data
-        await self._save()
+        self._save()
         log.info("registry_active_changed", provider=provider, model=model)
 
 

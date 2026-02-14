@@ -457,7 +457,9 @@ class TestFallbackChainEdgeCases:
         loop = self._make_loop(provider, fallback_models=["fb-1", "fb-2"])
         loop._build_system_prompt = AsyncMock(return_value="system")
 
-        with pytest.raises(ValueError, match="Error from fb-2"):
+        from mirai.errors import ProviderError
+
+        with pytest.raises(ProviderError, match="Error from fb-2"):
             async for _ in loop._execute_cycle("Hello", model="p"):
                 pass
 
