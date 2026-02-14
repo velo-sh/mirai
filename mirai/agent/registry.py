@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -45,12 +46,46 @@ class EnrichmentSource(Protocol):
     def enrich(self, entry: RegistryModelEntry, provider: str) -> RegistryModelEntry: ...
 
 
-# Provider name → (env var for API key, import path for provider class)
-_PROVIDER_SPECS: list[tuple[str, str, str]] = [
-    ("minimax", "MINIMAX_API_KEY", "mirai.agent.providers.minimax.MiniMaxProvider"),
-    ("anthropic", "ANTHROPIC_API_KEY", "mirai.agent.providers.anthropic.AnthropicProvider"),
-    ("openai", "OPENAI_API_KEY", "mirai.agent.providers.openai.OpenAIProvider"),
+@dataclass(frozen=True)
+class ProviderSpec:
+    """Specification for a provider that the registry can scan."""
+
+    name: str
+    env_key: str
+    import_path: str
+    base_url: str | None = None
+    signup_url: str | None = None
+    notes: str | None = None
+
+
+# Built-in providers (dedicated classes)
+_BUILTIN_SPECS: list[ProviderSpec] = [
+    ProviderSpec("minimax", "MINIMAX_API_KEY", "mirai.agent.providers.minimax.MiniMaxProvider"),
+    ProviderSpec("anthropic", "ANTHROPIC_API_KEY", "mirai.agent.providers.anthropic.AnthropicProvider"),
+    ProviderSpec("openai", "OPENAI_API_KEY", "mirai.agent.providers.openai.OpenAIProvider"),
 ]
+
+
+def _build_provider_specs() -> list[ProviderSpec]:
+    """Combine built-in and free provider specs into a single scan list."""
+    from mirai.agent.free_providers import FREE_PROVIDER_SPECS
+
+    specs = list(_BUILTIN_SPECS)
+    builtin_names = {s.name for s in specs}
+    for fp in FREE_PROVIDER_SPECS:
+        if fp.name in builtin_names:
+            continue  # don't duplicate built-in providers
+        specs.append(
+            ProviderSpec(
+                name=fp.name,
+                env_key=fp.env_key,
+                import_path="mirai.agent.providers.openai.OpenAIProvider",
+                base_url=fp.base_url,
+                signup_url=fp.signup_url,
+                notes=fp.notes,
+            )
+        )
+    return specs
 
 
 def _import_provider_class(import_path: str) -> type | None:
@@ -189,40 +224,46 @@ class ModelRegistry:
         # ------------------------------------------------------------------
         async def _scan_providers() -> dict[str, RegistryProviderData]:
             result: dict[str, RegistryProviderData] = {}
-            for pname, env_key, import_path in _PROVIDER_SPECS:
-                api_key = os.getenv(env_key)
+            all_specs = _build_provider_specs()
+            for spec in all_specs:
+                api_key = os.getenv(spec.env_key)
                 if not api_key:
-                    existing = self._data.providers.get(pname)
-                    result[pname] = RegistryProviderData(
+                    existing = self._data.providers.get(spec.name)
+                    result[spec.name] = RegistryProviderData(
                         available=False,
-                        env_key=env_key,
+                        env_key=spec.env_key,
                         models=existing.models if existing else [],
                     )
                     continue
 
                 try:
-                    cls = _import_provider_class(import_path)
+                    cls = _import_provider_class(spec.import_path)
                     if cls is None:
                         continue
 
-                    provider = cls(api_key=api_key)
+                    # Pass base_url and provider_name for free providers
+                    init_kwargs: dict[str, Any] = {"api_key": api_key}
+                    if spec.base_url:
+                        init_kwargs["base_url"] = spec.base_url
+                        init_kwargs["provider_name"] = spec.name
+                    provider = cls(**init_kwargs)
                     raw_models = await provider.list_models()
                     models = [RegistryModelEntry.from_model_info(m) for m in raw_models]
-                    result[pname] = RegistryProviderData(
+                    result[spec.name] = RegistryProviderData(
                         available=True,
-                        env_key=env_key,
+                        env_key=spec.env_key,
                         models=models,
                     )
-                    log.info("registry_provider_refreshed", provider=pname, model_count=len(models))
+                    log.info("registry_provider_refreshed", provider=spec.name, model_count=len(models))
                 except Exception as exc:
-                    log.warning("registry_refresh_failed", provider=pname, error=str(exc))
-                    existing = self._data.providers.get(pname)
-                    result[pname] = (
+                    log.warning("registry_refresh_failed", provider=spec.name, error=str(exc))
+                    existing = self._data.providers.get(spec.name)
+                    result[spec.name] = (
                         existing
                         if existing
                         else RegistryProviderData(
                             available=False,
-                            env_key=env_key,
+                            env_key=spec.env_key,
                             models=[],
                         )
                     )
@@ -321,62 +362,75 @@ class ModelRegistry:
             lines.append(f"Last refreshed: {self._data.last_refreshed}")
 
         available_providers = {k: v for k, v in self._data.providers.items() if v.available}
+        unconfigured_free: list[ProviderSpec] = []
+
+        # Identify unconfigured free providers for the suggestion section
+        all_specs = _build_provider_specs()
+        for spec in all_specs:
+            if spec.signup_url and spec.name not in available_providers:
+                unconfigured_free.append(spec)
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
-            return "\n".join(lines)
+        else:
+            lines.append(f"\nAvailable models ({len(available_providers)} provider(s)):")
 
-        lines.append(f"\nAvailable models ({len(available_providers)} provider(s)):")
+            for pname, pdata in available_providers.items():
+                is_active = pname == self.active_provider
+                lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
 
-        for pname, pdata in available_providers.items():
-            is_active = pname == self.active_provider
-            lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
+                if not pdata.models:
+                    lines.append("  (no models discovered)")
+                    continue
 
-            if not pdata.models:
-                lines.append("  (no models discovered)")
-                continue
+                for m in pdata.models:
+                    marker = " ← current" if (is_active and m.id == self.active_model) else ""
 
-            for m in pdata.models:
-                marker = " ← current" if (is_active and m.id == self.active_model) else ""
+                    # Main line: id + description + capability tags
+                    tags = []
+                    if m.reasoning:
+                        tags.append("reasoning")
+                    if m.vision:
+                        tags.append("vision")
+                    if m.supports_tool_use:
+                        tags.append("tool_use")
+                    if m.supports_json_mode:
+                        tags.append("json_mode")
 
-                # Main line: id + description + capability tags
-                tags = []
-                if m.reasoning:
-                    tags.append("reasoning")
-                if m.vision:
-                    tags.append("vision")
-                if m.supports_tool_use:
-                    tags.append("tool_use")
-                if m.supports_json_mode:
-                    tags.append("json_mode")
+                    tag_str = " ".join(f"[{t}]" for t in tags)
+                    desc = f"  - {m.id}: {m.description or m.name}"
+                    if tag_str:
+                        desc += f" {tag_str}"
 
-                tag_str = " ".join(f"[{t}]" for t in tags)
-                desc = f"  - {m.id}: {m.description or m.name}"
-                if tag_str:
-                    desc += f" {tag_str}"
+                    # Quota annotation
+                    if quota_data and m.id in quota_data:
+                        pct = quota_data[m.id]
+                        if pct >= 100.0:
+                            desc += " ⚠️ exhausted"
+                        elif pct >= 80.0:
+                            desc += f" ({pct:.0f}% used)"
 
-                # Quota annotation
-                if quota_data and m.id in quota_data:
-                    pct = quota_data[m.id]
-                    if pct >= 100.0:
-                        desc += " ⚠️ exhausted"
-                    elif pct >= 80.0:
-                        desc += f" ({pct:.0f}% used)"
+                    lines.append(desc + marker)
 
-                lines.append(desc + marker)
+                    # Detail line: context + pricing + cutoff
+                    details = []
+                    ctx = _format_context(m.context_window)
+                    if ctx:
+                        details.append(ctx)
+                    pricing = _format_pricing(m.input_price, m.output_price)
+                    if pricing:
+                        details.append(pricing)
+                    if m.knowledge_cutoff:
+                        details.append(f"cutoff {m.knowledge_cutoff}")
+                    if details:
+                        lines.append(f"    {' · '.join(details)}")
 
-                # Detail line: context + pricing + cutoff
-                details = []
-                ctx = _format_context(m.context_window)
-                if ctx:
-                    details.append(ctx)
-                pricing = _format_pricing(m.input_price, m.output_price)
-                if pricing:
-                    details.append(pricing)
-                if m.knowledge_cutoff:
-                    details.append(f"cutoff {m.knowledge_cutoff}")
-                if details:
-                    lines.append(f"    {' · '.join(details)}")
+        # Show unconfigured free providers as suggestions
+        if unconfigured_free:
+            lines.append("\n### Free providers (not configured):")
+            for spec in unconfigured_free:
+                note = f" — {spec.notes}" if spec.notes else ""
+                lines.append(f"  ✗ {spec.name}: set {spec.env_key} (signup: {spec.signup_url}){note}")
 
         return "\n".join(lines)
 

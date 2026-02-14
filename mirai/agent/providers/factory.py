@@ -66,6 +66,39 @@ def create_provider(
         log.info("provider_initialized", provider="minimax", model=model, base_url=base_url)
         return MiniMaxProvider(api_key=key, model=model, base_url=base_url)
 
+    # ------------------------------------------------------------------
+    # Data-driven: check free provider catalog
+    # ------------------------------------------------------------------
+    from mirai.agent.free_providers import get_free_provider_spec
+
+    free_spec = get_free_provider_spec(provider)
+    if free_spec is not None:
+        from mirai.agent.providers.openai import OpenAIProvider
+
+        key = api_key or os.getenv(free_spec.env_key)
+        if not key:
+            raise ProviderError(
+                f"{free_spec.display_name} provider requires an API key. "
+                f"Set api_key in config or {free_spec.env_key} environment variable. "
+                f"Signup: {free_spec.signup_url}"
+            )
+        effective_url = base_url or free_spec.base_url
+        log.info(
+            "provider_initialized",
+            provider=free_spec.name,
+            model=model,
+            base_url=effective_url,
+        )
+        return OpenAIProvider(
+            api_key=key,
+            model=model,
+            base_url=effective_url,
+            provider_name=free_spec.name,
+        )
+
+    # ------------------------------------------------------------------
+    # Fallback: generic OpenAI-compatible provider
+    # ------------------------------------------------------------------
     if provider == "openai" or provider not in ("antigravity", "anthropic", "minimax"):
         from mirai.agent.providers.openai import OpenAIProvider
 
@@ -76,7 +109,7 @@ def create_provider(
                 "Set api_key in config or OPENAI_API_KEY environment variable."
             )
         log.info("provider_initialized", provider="openai", model=model, base_url=base_url)
-        return OpenAIProvider(api_key=key, model=model, base_url=base_url)
+        return OpenAIProvider(api_key=key, model=model, base_url=base_url, provider_name=provider)
 
     raise ProviderError(
         "No API credentials available. Either:\n"
