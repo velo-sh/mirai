@@ -69,6 +69,7 @@ def _make_registry(path: Path, **kwargs):
     registry.PATH = path  # Override class var on instance
     registry._config_provider = kwargs.get("config_provider")
     registry._config_model = kwargs.get("config_model")
+    registry._enrichment_source = None
     # Manually assign PATH before _load so _load reads from correct path
     ModelRegistry.PATH = path
     registry._data = registry._load()
@@ -84,6 +85,7 @@ def _make_registry_from_data(path: Path, data: dict, **kwargs):
     registry = ModelRegistry.__new__(ModelRegistry)
     registry._config_provider = kwargs.get("config_provider")
     registry._config_model = kwargs.get("config_model")
+    registry._enrichment_source = None
     registry.PATH = path
     from mirai.agent.registry_models import RegistryData
 
@@ -108,17 +110,17 @@ class TestRegistryLifecycle:
         )
         assert registry.active_provider == "minimax"
         assert registry.active_model == "MiniMax-M2.5"
-        assert registry._data["providers"] == {}
+        assert registry._data.providers == {}
 
     def test_t1_2_normal_load(self, tmp_registry_path: Path, sample_registry_data: dict):
         """T1.2: Normal load — valid JSON exists."""
         registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
         assert registry.active_provider == "minimax"
         assert registry.active_model == "MiniMax-M2.5"
-        providers = registry._data["providers"]
+        providers = registry._data.providers
         assert "minimax" in providers
-        assert providers["minimax"]["available"] is True
-        assert len(providers["minimax"]["models"]) == 2
+        assert providers["minimax"].available is True
+        assert len(providers["minimax"].models) == 2
 
     def test_t1_3_corrupted_json(self, tmp_registry_path: Path):
         """T1.3: Corrupted JSON → falls back to empty state."""
@@ -130,7 +132,7 @@ class TestRegistryLifecycle:
         )
         # Should not crash, should fall back
         assert registry.active_provider == "minimax"
-        assert registry._data["providers"] == {}
+        assert registry._data.providers == {}
 
     @pytest.mark.asyncio
     async def test_t1_4_save_permission_error(self, tmp_registry_path: Path, sample_registry_data: dict):
@@ -243,9 +245,9 @@ class TestRefresh:
                 mock_import.return_value = MagicMock(return_value=mock_provider)
                 await registry.refresh()
 
-        assert registry._data["providers"]["minimax"]["available"] is True
-        assert len(registry._data["providers"]["minimax"]["models"]) == 1
-        assert registry._data["providers"]["minimax"]["models"][0]["id"] == "MiniMax-M2.5"
+        assert registry._data.providers["minimax"].available is True
+        assert len(registry._data.providers["minimax"].models) == 1
+        assert registry._data.providers["minimax"].models[0].id == "MiniMax-M2.5"
 
     @pytest.mark.asyncio
     async def test_t3_2_no_api_key(self, tmp_registry_path: Path):
@@ -261,8 +263,8 @@ class TestRefresh:
                 os.environ.pop(key, None)
             await registry.refresh()
 
-        for pdata in registry._data["providers"].values():
-            assert pdata["available"] is False
+        for pdata in registry._data.providers.values():
+            assert pdata.available is False
 
     @pytest.mark.asyncio
     async def test_t3_3_api_error_keeps_last_state(self, tmp_registry_path: Path, sample_registry_data: dict):
@@ -278,8 +280,9 @@ class TestRefresh:
                 await registry.refresh()
 
         # Should have kept original models
-        minimax = registry._data["providers"].get("minimax", {})
-        assert len(minimax.get("models", [])) == len(original_models)
+        minimax = registry._data.providers.get("minimax")
+        assert minimax is not None
+        assert len(minimax.models) == len(original_models)
 
     @pytest.mark.asyncio
     async def test_t3_6_partial_failure(self, tmp_registry_path: Path):
@@ -304,9 +307,10 @@ class TestRefresh:
                 await registry.refresh()
 
         # Anthropic should succeed
-        anthropic = registry._data["providers"].get("anthropic", {})
-        assert anthropic.get("available") is True
-        assert len(anthropic.get("models", [])) == 1
+        anthropic = registry._data.providers.get("anthropic")
+        assert anthropic is not None
+        assert anthropic.available is True
+        assert len(anthropic.models) == 1
 
 
 # ===========================================================================
