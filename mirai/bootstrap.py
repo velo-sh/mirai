@@ -95,10 +95,13 @@ class MiraiApp:
 
         self._init_config()
         await self._init_storage()
+        self._init_cron()  # before agent stack so ToolContext can reference it
         await self._init_agent_stack()
+        # Wire agent into cron (cron was created before agent existed)
+        if self.cron and self.agent:
+            self.cron.agent = self.agent
         await self._init_integrations()
         self._init_background_tasks()
-        self._init_cron()
 
         return self
 
@@ -310,14 +313,17 @@ class MiraiApp:
         )
 
     def _init_cron(self) -> None:
-        """Initialize the cron scheduler with JSON5 file persistence."""
+        """Initialize the cron scheduler with JSON5 file persistence.
+
+        Note: agent reference is wired later in create() after _init_agent_stack().
+        """
         state_dir = CONFIG_DIR / "state" / "cron"
         ensure_system_jobs(state_dir)
 
         im_provider = getattr(self, "_im_provider", None)
         self.cron = CronScheduler(
             state_dir=state_dir,
-            agent=self.agent,
+            agent=None,  # wired after agent stack init
             im_provider=im_provider,
         )
         self.cron.start()
