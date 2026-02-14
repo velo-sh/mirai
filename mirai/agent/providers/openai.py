@@ -55,9 +55,11 @@ class OpenAIProvider:
         model: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 4096,
+        provider_name: str | None = None,
     ):
         self.model = model or self.DEFAULT_MODEL
         self._max_tokens = max_tokens
+        self._provider_name = provider_name or "openai"
         self.client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=base_url or self.DEFAULT_BASE_URL,
@@ -75,7 +77,7 @@ class OpenAIProvider:
 
     @property
     def provider_name(self) -> str:
-        return "openai"
+        return self._provider_name
 
     # ------------------------------------------------------------------
     # Model discovery & usage
