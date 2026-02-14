@@ -14,7 +14,8 @@ from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.providers import create_provider
 from mirai.agent.registry import ModelRegistry, registry_refresh_loop
 from mirai.agent.tools.system import SystemTool
-from mirai.config import MiraiConfig
+from mirai.config import CONFIG_DIR, MiraiConfig
+from mirai.cron import CronScheduler, ensure_system_jobs
 from mirai.db.session import init_db
 from mirai.logging import get_logger, setup_logging
 from mirai.tracing import setup_tracing
@@ -76,6 +77,7 @@ class MiraiApp:
         self.agent: AgentLoop | None = None
         self.heartbeat: HeartbeatManager | None = None
         self.dreamer: AgentDreamer | None = None
+        self.cron: CronScheduler | None = None
         self.registry: ModelRegistry | None = None
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
@@ -96,6 +98,7 @@ class MiraiApp:
         await self._init_agent_stack()
         await self._init_integrations()
         self._init_background_tasks()
+        self._init_cron()
 
         return self
 
@@ -112,6 +115,8 @@ class MiraiApp:
             self._tasks.clear()
 
         # Stop background services
+        if self.cron:
+            await self.cron.stop()
         if self.dreamer:
             await self.dreamer.stop()
         if self.heartbeat:
@@ -302,6 +307,20 @@ class MiraiApp:
             _health_check_loop(self.registry, interval=600),
             name="provider_health_check",
         )
+
+    def _init_cron(self) -> None:
+        """Initialize the cron scheduler with JSON5 file persistence."""
+        state_dir = CONFIG_DIR / "state" / "cron"
+        ensure_system_jobs(state_dir)
+
+        im_provider = getattr(self, "_im_provider", None)
+        self.cron = CronScheduler(
+            state_dir=state_dir,
+            agent=self.agent,
+            im_provider=im_provider,
+        )
+        self.cron.start()
+        log.info("cron_scheduler_started", state_dir=str(state_dir))
 
     # ------------------------------------------------------------------
     # Background task tracking

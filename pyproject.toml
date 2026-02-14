@@ -26,6 +26,8 @@ dependencies = [
     "granian>=2.6.0",
     "tenacity>=9.1.4",
     "pydantic-settings>=2.12.0",
+    "croniter>=2.0",
+    "json5>=0.9",
 ]
 
 [dependency-groups]
