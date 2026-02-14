@@ -33,7 +33,7 @@ from mirai.agent.registry_models import (
 from mirai.logging import get_logger
 
 if TYPE_CHECKING:
-    pass
+    from mirai.agent.free_providers import FreeProviderData, FreeProviderSource
 
 log = get_logger("mirai.registry")
 
@@ -144,6 +144,7 @@ class ModelRegistry:
         self._config_model = config_model
         self._data: RegistryData = self._load()
         self._enrichment_source: EnrichmentSource | None = None
+        self._free_source: FreeProviderSource | None = None
 
     def set_enrichment_source(self, source: EnrichmentSource) -> None:
         """Register an external metadata enrichment source.
@@ -153,6 +154,15 @@ class ModelRegistry:
         context limits).
         """
         self._enrichment_source = source
+
+    def set_free_source(self, source: FreeProviderSource) -> None:
+        """Register a free-provider discovery source.
+
+        When set, ``refresh()`` will concurrently fetch public model
+        catalogs (OpenRouter, SambaNova, etc.) and merge them into the
+        registry so unconfigured providers show available models.
+        """
+        self._free_source = source
 
     # ------------------------------------------------------------------
     # Load / Save
@@ -284,10 +294,26 @@ class ModelRegistry:
                 log.warning("enrichment_fetch_failed", error=str(exc))
                 return {}
 
-        # Run both concurrently — enrichment never blocks provider scanning
-        new_providers, enrichment_data = await asyncio.gather(
+        async def _fetch_free_models() -> dict[str, FreeProviderData]:
+            if self._free_source is None:
+                return {}
+            try:
+                return await asyncio.wait_for(
+                    self._free_source.fetch(),
+                    timeout=20,
+                )
+            except TimeoutError:
+                log.warning("free_provider_fetch_timeout")
+                return {}
+            except Exception as exc:
+                log.warning("free_provider_fetch_failed", error=str(exc))
+                return {}
+
+        # Run all three concurrently — enrichment/free never block provider scanning
+        new_providers, enrichment_data, free_data = await asyncio.gather(
             _scan_providers(),
             _fetch_enrichment(),
+            _fetch_free_models(),
         )
 
         # ------------------------------------------------------------------
@@ -318,6 +344,46 @@ class ModelRegistry:
                 enriched=enriched_count,
                 total=total_count,
             )
+
+        # ------------------------------------------------------------------
+        # Phase 3: Merge free-provider public model data into unconfigured
+        # providers so the catalog can display model counts and names.
+        # ------------------------------------------------------------------
+        if free_data:
+            for fp_name, fp_data in free_data.items():
+                fp_pdata = new_providers.get(fp_name)
+                if fp_pdata is not None and not fp_pdata.available and fp_data.models:
+                    # Convert FreeModelEntry -> RegistryModelEntry
+                    free_models = [
+                        RegistryModelEntry(
+                            id=fm.id,
+                            name=fm.name,
+                        )
+                        for fm in fp_data.models
+                    ]
+                    new_providers[fp_name] = RegistryProviderData(
+                        available=False,
+                        env_key=fp_pdata.env_key,
+                        models=free_models,
+                    )
+            log.info(
+                "free_provider_data_merged",
+                providers_with_models=sum(1 for fp in free_data.values() if fp.models),
+            )
+
+        # ------------------------------------------------------------------
+        # Phase 4: Apply static capability tags to free-provider models.
+        # The OpenAI /models endpoint doesn't report capabilities, so we
+        # use pattern-matching to tag well-known models.
+        # ------------------------------------------------------------------
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        free_provider_names = {spec.name for spec in _build_provider_specs() if spec.signup_url}
+        for pname in free_provider_names:
+            cap_pdata = new_providers.get(pname)
+            if cap_pdata and cap_pdata.models:
+                for m in cap_pdata.models:
+                    enrich_capabilities(m)
 
         # Atomic swap (copy-on-write)
         new_data = RegistryData(
@@ -430,7 +496,12 @@ class ModelRegistry:
             lines.append("\n### Free providers (not configured):")
             for spec in unconfigured_free:
                 note = f" — {spec.notes}" if spec.notes else ""
-                lines.append(f"  ✗ {spec.name}: set {spec.env_key} (signup: {spec.signup_url}){note}")
+                # Show model count if public model data was fetched
+                cat_pdata = self._data.providers.get(spec.name)
+                model_hint = ""
+                if cat_pdata and cat_pdata.models:
+                    model_hint = f" ({len(cat_pdata.models)} models available)"
+                lines.append(f"  ✗ {spec.name}{model_hint}: set {spec.env_key} (signup: {spec.signup_url}){note}")
 
         return "\n".join(lines)
 

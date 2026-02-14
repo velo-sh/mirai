@@ -934,6 +934,7 @@ class TestRegistryIntegration:
 
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
+        reg._free_source = None
 
         # Set up enrichment source
         cache_path = tmp_path / "cache.json"
@@ -984,6 +985,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._enrichment_source = None
+        reg._free_source = None
 
         mock_model = ModelInfo(
             id="minimax-m2.5",
@@ -1022,8 +1024,7 @@ class TestRegistryIntegration:
 
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
-
-        # Enrichment source that raises on fetch
+        reg._free_source = None
         mock_source = MagicMock()
         mock_source.fetch = AsyncMock(side_effect=RuntimeError("network down"))
         reg._enrichment_source = mock_source
@@ -1063,8 +1064,7 @@ class TestRegistryIntegration:
         reg._config_model = "minimax-m2.5"
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
-
-        # Enrichment source that hangs forever
+        reg._free_source = None
         mock_source = MagicMock()
 
         async def _hang_forever() -> dict:
@@ -1124,6 +1124,7 @@ class TestRegistryIntegration:
         reg._config_model = "minimax-m2.5"
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
+        reg._free_source = None
 
         # Track events to prove concurrency
         events: list[str] = []
@@ -1187,6 +1188,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._enrichment_source = None
+        reg._free_source = None
 
         mock_model = ModelInfo(id="minimax-m2.5", name="MiniMax M2.5")
 

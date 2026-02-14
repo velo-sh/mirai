@@ -191,11 +191,20 @@ class MiraiConfig(BaseSettings):
 
         # Cross-field validation
         if self.llm.provider not in ("antigravity",) and not self.llm.api_key:
-            env_map = {
+            env_map: dict[str, str] = {
                 "anthropic": "ANTHROPIC_API_KEY",
                 "openai": "OPENAI_API_KEY",
                 "minimax": "MINIMAX_API_KEY",
             }
+            # Also check free providers
+            try:
+                from mirai.agent.free_providers import FREE_PROVIDER_SPECS
+
+                for spec in FREE_PROVIDER_SPECS:
+                    env_map[spec.name] = spec.env_key
+            except ImportError:
+                pass
+
             provider_env_key = env_map.get(self.llm.provider)
             if provider_env_key and not os.getenv(provider_env_key):
                 _log.warning(
