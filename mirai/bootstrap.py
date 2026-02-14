@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mirai import integrations
 from mirai.agent.agent_dreamer import AgentDreamer
 from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.heartbeat import HeartbeatManager
@@ -244,14 +245,17 @@ class MiraiApp:
     # ------------------------------------------------------------------
 
     async def _init_integrations(self) -> None:
-        """Start heartbeat, Feishu, check-in card, and dreamer."""
+        """Start heartbeat, Feishu, check-in card, and dreamer.
+
+        Delegates to :mod:`mirai.integrations` for Feishu and dreamer setup.
+        """
         assert self.config is not None
         config = self.config
 
         if not self.agent:
             return
 
-        im_provider = self._create_im_provider(config)
+        im_provider = integrations.create_im_provider(config)
 
         if config.heartbeat.enabled:
             self.heartbeat = HeartbeatManager(
@@ -261,9 +265,9 @@ class MiraiApp:
             )
             self.heartbeat.start()
 
-        self._start_feishu_receiver(config)
-        await self._send_checkin(im_provider, config)
-        self._start_dreamer(config)
+        integrations.start_feishu_receiver(self.agent, config)
+        await integrations.send_checkin(self.agent, im_provider, config)
+        self.dreamer = integrations.start_dreamer(self.agent, config)
 
     def _init_background_tasks(self) -> None:
         """Register long-running background tasks (registry refresh, etc.)."""
@@ -307,105 +311,3 @@ class MiraiApp:
 
         task.add_done_callback(_done)
         return task
-
-    # ----- Private helpers -----
-
-    @staticmethod
-    def _create_im_provider(config: MiraiConfig):
-        """Create FeishuProvider if configured, else None."""
-        if not config.feishu.enabled:
-            return None
-
-        if config.feishu.app_id and config.feishu.app_secret:
-            from mirai.agent.im.feishu import FeishuProvider
-
-            log.info("feishu_enabled", mode="app_api")
-            return FeishuProvider(app_id=config.feishu.app_id, app_secret=config.feishu.app_secret)
-
-        if config.feishu.webhook_url:
-            from mirai.agent.im.feishu import FeishuProvider
-
-            log.info("feishu_enabled", mode="webhook")
-            return FeishuProvider(webhook_url=config.feishu.webhook_url)
-
-        return None
-
-    def _start_feishu_receiver(self, config: MiraiConfig) -> None:
-        """Start Feishu WebSocket if configured."""
-        if not (config.feishu.enabled and config.feishu.app_id and config.feishu.app_secret):
-            return
-
-        from mirai.agent.im.feishu_receiver import FeishuEventReceiver
-
-        agent = self.agent
-
-        async def handle_feishu_message(
-            sender_id: str,
-            text: str | list[dict[str, Any]],
-            chat_id: str,
-            history: list[dict],
-        ) -> str:
-            """Route incoming Feishu messages to AgentLoop with conversation history."""
-            if agent:
-                return await agent.run(text, history=history)
-            return "Agent is not initialized."
-
-        receiver = FeishuEventReceiver(
-            app_id=config.feishu.app_id,
-            app_secret=config.feishu.app_secret,
-            message_handler=handle_feishu_message,
-            storage=agent.l3_storage if agent else None,
-        )
-        receiver.start(loop=asyncio.get_running_loop())
-        log.info("feishu_receiver_started")
-
-    async def _send_checkin(self, im_provider, config: MiraiConfig) -> None:
-        """Send check-in card to Feishu on startup."""
-        if not (im_provider and self.agent):
-            return
-
-        checkin_card = {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "template": "blue",
-                "title": {"content": f"🤖 {self.agent.name} is Online", "tag": "plain_text"},
-            },
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "content": (
-                            f"**Status:** Ready to collaborate\n"
-                            f"**Model:** `{config.llm.default_model}`\n"
-                            f"**Version:** `v1.2.0`"
-                        ),
-                        "tag": "lark_md",
-                    },
-                },
-                {"tag": "hr"},
-                {
-                    "tag": "note",
-                    "elements": [{"tag": "plain_text", "content": "Send me a message anytime to start!"}],
-                },
-            ],
-        }
-        checkin_ok = await im_provider.send_card(
-            card_content=checkin_card,
-            chat_id=config.feishu.curator_chat_id,
-            prefer_p2p=False,
-        )
-        if checkin_ok:
-            log.info("feishu_checkin_sent", agent=self.agent.name, style="card")
-        else:
-            log.warning("feishu_checkin_failed")
-
-    def _start_dreamer(self, config: MiraiConfig) -> None:
-        """Start the Dreamer background service."""
-        if not self.agent:
-            return
-        self.dreamer = AgentDreamer(
-            self.agent,
-            self.agent.l3_storage,
-            interval_seconds=config.dreamer.interval,
-        )
-        self.dreamer.start(loop=asyncio.get_running_loop())

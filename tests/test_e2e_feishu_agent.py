@@ -18,10 +18,8 @@ All Feishu SDK HTTP calls are mocked; the AgentLoop pipeline is real
 (backed by MockProvider).
 """
 
-import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import duckdb
 import orjson
 import pytest
 
@@ -30,26 +28,20 @@ from mirai.agent.im.base import BaseIMProvider
 from mirai.agent.im.feishu_receiver import FeishuEventReceiver
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
+from mirai.db.duck import DuckDBStorage
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _init_memory(self, db_path=":memory:"):
-    """Replacement __init__ for DuckDBStorage that uses in-memory DB."""
-    self.db_path = ":memory:"
-    self.conn = duckdb.connect(":memory:")
-    self._lock = threading.Lock()
-    self._init_schema()
-
-
 def _create_agent() -> AgentLoop:
     """Real AgentLoop with MockProvider (no network, in-memory DB)."""
-    with patch("mirai.agent.agent_loop.DuckDBStorage.__init__", _init_memory):
-        agent = AgentLoop(
-            provider=MockProvider(),
-            tools=[EchoTool()],
-            collaborator_id="e2e-feishu-test",
-        )
+    storage = DuckDBStorage(db_path=":memory:")
+    agent = AgentLoop(
+        provider=MockProvider(),
+        tools=[EchoTool()],
+        collaborator_id="e2e-feishu-test",
+        l3_storage=storage,
+    )
     agent.name = "Mira"
     agent.role = "collaborator"
     agent.base_system_prompt = "You are Mira, a helpful collaborator."

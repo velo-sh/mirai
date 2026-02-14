@@ -248,3 +248,82 @@ class TestFeishuHistory:
     async def test_empty_history_returns_empty_list(self, storage):
         history = await storage.get_feishu_history("nonexistent-chat")
         assert history == []
+
+
+# ---------------------------------------------------------------------------
+# Concurrency tests — validate thread-safety under asyncio.gather
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrency:
+    """Ensure DuckDBStorage handles concurrent access without data races."""
+
+    @pytest.fixture
+    def storage(self):
+        storage = DuckDBStorage(db_path=":memory:")
+        yield storage
+        storage.close()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_writes(self, storage):
+        """20 parallel append_trace calls should all succeed."""
+        import asyncio
+
+        traces = [
+            DBTrace(
+                id=f"conc-w-{i:03d}",
+                collaborator_id="concurrency-test",
+                trace_type="message",
+                content=f"concurrent write {i}",
+            )
+            for i in range(20)
+        ]
+
+        await asyncio.gather(*(storage.append_trace(t) for t in traces))
+
+        # Verify all 20 traces were persisted
+        result = await storage.get_recent_traces("concurrency-test", limit=50)
+        assert len(result) == 20
+
+    @pytest.mark.asyncio
+    async def test_concurrent_reads_and_writes(self, storage):
+        """Mixed read/write operations in parallel should not corrupt data."""
+        import asyncio
+
+        # Seed some data first
+        for i in range(5):
+            await storage.append_trace(
+                DBTrace(
+                    id=f"conc-rw-seed-{i:03d}",
+                    collaborator_id="concurrency-rw",
+                    trace_type="message",
+                    content=f"seed {i}",
+                )
+            )
+
+        # Now run reads and writes concurrently
+        write_traces = [
+            DBTrace(
+                id=f"conc-rw-{i:03d}",
+                collaborator_id="concurrency-rw",
+                trace_type="tool_use",
+                content=f"concurrent rw {i}",
+            )
+            for i in range(10)
+        ]
+
+        async def _read():
+            return await storage.get_recent_traces("concurrency-rw", limit=50)
+
+        tasks = [storage.append_trace(t) for t in write_traces]
+        tasks.extend([_read() for _ in range(5)])
+
+        results = await asyncio.gather(*tasks)
+
+        # All writes should have succeeded
+        final = await storage.get_recent_traces("concurrency-rw", limit=50)
+        assert len(final) == 15  # 5 seed + 10 concurrent writes
+
+        # All reads should have returned lists (no exceptions)
+        for r in results[10:]:  # the read results
+            assert isinstance(r, list)
