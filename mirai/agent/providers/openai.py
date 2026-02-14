@@ -26,6 +26,7 @@ from tenacity import (
 
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
+from mirai.errors import ProviderError
 from mirai.logging import get_logger
 from mirai.tracing import get_tracer
 
@@ -103,6 +104,44 @@ class OpenAIProvider:
         return UsageSnapshot(provider=self.provider_name, error="not supported")
 
     # ------------------------------------------------------------------
+    # Rate-limit awareness
+    # ------------------------------------------------------------------
+
+    _DAILY_LIMIT_KEYWORDS = frozenset(
+        {
+            "daily",
+            "quota",
+            "exceeded",
+            "exhausted",
+            "limit reached",
+            "rate limit reached",
+        }
+    )
+
+    def _is_daily_limit(self, exc: openai.RateLimitError) -> bool:
+        """Detect whether a 429 is a daily/quota exhaustion (not transient)."""
+        body = str(getattr(exc, "body", "") or "").lower()
+        message = str(getattr(exc, "message", "") or "").lower()
+        text = body + " " + message
+        return any(kw in text for kw in self._DAILY_LIMIT_KEYWORDS)
+
+    def _raise_daily_limit_error(self) -> None:
+        """Raise a clear ProviderError when daily limit is hit."""
+        from mirai.agent.free_providers import FREE_PROVIDER_SPECS
+
+        signup = ""
+        for spec in FREE_PROVIDER_SPECS:
+            if spec.name == self._provider_name:
+                signup = f" Signup/upgrade: {spec.signup_url}" if spec.signup_url else ""
+                break
+
+        raise ProviderError(
+            f"Daily rate limit exhausted for provider '{self._provider_name}'. "
+            f"Retrying won't help — consider switching provider or waiting until reset."
+            f"{signup}"
+        )
+
+    # ------------------------------------------------------------------
     # Chat completion
     # ------------------------------------------------------------------
 
@@ -154,7 +193,17 @@ class OpenAIProvider:
                 "max_tokens": kwargs.pop("max_tokens", self._max_tokens),
                 **kwargs,
             }
-            response = await self.client.chat.completions.create(**request_params)  # type: ignore[arg-type]
+            try:
+                response = await self.client.chat.completions.create(**request_params)  # type: ignore[arg-type]
+            except openai.RateLimitError as exc:
+                if self._is_daily_limit(exc):
+                    log.warning(
+                        "daily_rate_limit_hit",
+                        provider=self._provider_name,
+                        body=str(getattr(exc, "body", "")),
+                    )
+                    self._raise_daily_limit_error()
+                raise  # transient 429 → let tenacity retry
 
             if hasattr(response, "usage") and response.usage:
                 span.set_attribute("llm.usage.prompt_tokens", response.usage.prompt_tokens)

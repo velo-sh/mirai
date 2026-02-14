@@ -200,6 +200,7 @@ def _make_registry_from_data(path: Path, data: dict, **kwargs):
     registry._config_provider = kwargs.get("config_provider")
     registry._config_model = kwargs.get("config_model")
     registry._enrichment_source = None
+    registry._free_source = None
     registry.PATH = path
     from mirai.agent.registry_models import RegistryData
 
@@ -584,3 +585,194 @@ class TestFreeProviderLiveSmoke:
         text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
         assert len(text_blocks) >= 1
         assert len(text_blocks[0].text.strip()) > 0
+
+
+# ===========================================================================
+# FP8: Capability enrichment
+# ===========================================================================
+
+
+class TestCapabilityEnrichment:
+    """FP8: Static capability tagging via pattern matching."""
+
+    def _make_entry(self, model_id: str):
+        from mirai.agent.registry_models import RegistryModelEntry
+
+        return RegistryModelEntry(id=model_id, name=model_id)
+
+    def test_fp8_1_deepseek_r1_gets_reasoning(self):
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        e = self._make_entry("deepseek/deepseek-r1:free")
+        enrich_capabilities(e)
+        assert e.reasoning is True
+
+    def test_fp8_2_pixtral_gets_vision(self):
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        e = self._make_entry("mistralai/pixtral-12b-2409")
+        enrich_capabilities(e)
+        assert e.vision is True
+
+    def test_fp8_3_llama3_gets_tool_use(self):
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        e = self._make_entry("meta-llama/llama-3.3-70b-versatile")
+        enrich_capabilities(e)
+        assert e.supports_tool_use is True
+
+    def test_fp8_4_qwen_gets_tool_use(self):
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        e = self._make_entry("qwen/qwen-2.5-72b-instruct")
+        enrich_capabilities(e)
+        assert e.supports_tool_use is True
+
+    def test_fp8_5_unknown_model_unchanged(self):
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        e = self._make_entry("some-unknown-model")
+        enrich_capabilities(e)
+        assert e.reasoning is False
+        assert e.vision is False
+        # tool_use defaults to True in RegistryModelEntry, so this stays True
+        assert e.supports_tool_use is True
+
+    def test_fp8_6_provider_native_not_overwritten(self):
+        """If provider already set vision=True, enrich should not reset it."""
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+        from mirai.agent.registry_models import RegistryModelEntry
+
+        e = RegistryModelEntry(id="some-model", name="Some Model", vision=True)
+        enrich_capabilities(e)
+        assert e.vision is True  # unchanged
+
+
+# ===========================================================================
+# FP9: Daily rate limit detection
+# ===========================================================================
+
+
+class TestDailyRateLimitDetection:
+    """FP9: OpenAIProvider detects daily quota exhaustion."""
+
+    def _make_provider(self, provider_name: str = "groq"):
+        from mirai.agent.providers.openai import OpenAIProvider
+
+        return OpenAIProvider(api_key="test", provider_name=provider_name)
+
+    def test_fp9_1_daily_keyword_detected(self):
+        import openai
+
+        p = self._make_provider()
+        exc = openai.RateLimitError(
+            message="Rate limit reached. Daily quota exceeded.",
+            response=MagicMock(status_code=429),
+            body={"error": {"message": "Rate limit reached. Daily quota exceeded."}},
+        )
+        assert p._is_daily_limit(exc) is True
+
+    def test_fp9_2_transient_429_not_detected(self):
+        import openai
+
+        p = self._make_provider()
+        exc = openai.RateLimitError(
+            message="Too many requests. Please slow down.",
+            response=MagicMock(status_code=429),
+            body={"error": {"message": "Too many requests."}},
+        )
+        assert p._is_daily_limit(exc) is False
+
+    def test_fp9_3_daily_limit_error_includes_signup(self):
+        from mirai.errors import ProviderError
+
+        p = self._make_provider("groq")
+        with pytest.raises(ProviderError, match="console.groq.com"):
+            p._raise_daily_limit_error()
+
+    def test_fp9_4_daily_limit_error_includes_provider_name(self):
+        from mirai.errors import ProviderError
+
+        p = self._make_provider("openrouter")
+        with pytest.raises(ProviderError, match="openrouter"):
+            p._raise_daily_limit_error()
+
+
+# ===========================================================================
+# FP10: Registry free source integration
+# ===========================================================================
+
+
+class TestRegistryFreeSourceIntegration:
+    """FP10: FreeProviderSource data merges into registry during refresh."""
+
+    @pytest.fixture
+    def tmp_registry_path(self, tmp_path: Path) -> Path:
+        return tmp_path / "model_registry.json"
+
+    @pytest.mark.asyncio
+    async def test_fp10_1_unconfigured_provider_gets_model_count(self, tmp_registry_path: Path):
+        """After refresh with free source, unconfigured providers show model counts."""
+        from mirai.agent.free_providers import FreeModelEntry, FreeProviderData
+
+        data = {
+            "version": 1,
+            "active_provider": "minimax",
+            "active_model": "MiniMax-M2.5",
+            "providers": {},
+        }
+        registry = _make_registry_from_data(tmp_registry_path, data)
+
+        # Create a mock free source
+        mock_free_source = AsyncMock()
+        or_spec = get_free_provider_spec("openrouter")
+        assert or_spec is not None
+        mock_free_source.fetch = AsyncMock(
+            return_value={
+                "openrouter": FreeProviderData(
+                    spec=or_spec,
+                    models=[
+                        FreeModelEntry(id="model-a:free", name="Model A", provider="openrouter"),
+                        FreeModelEntry(id="model-b:free", name="Model B", provider="openrouter"),
+                    ],
+                    fetched_at=time.time(),
+                ),
+            }
+        )
+        registry._free_source = mock_free_source
+
+        # Clear all API keys so providers are unavailable
+        env_clear = {s.env_key: "" for s in FREE_PROVIDER_SPECS}
+        env_clear.update({"MINIMAX_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""})
+        with patch.dict(os.environ, env_clear, clear=False):
+            for key in env_clear:
+                os.environ.pop(key, None)
+            await registry.refresh()
+
+        or_data = registry._data.providers.get("openrouter")
+        assert or_data is not None
+        assert or_data.available is False
+        assert len(or_data.models) == 2
+
+    def test_fp10_2_catalog_shows_model_count_for_unconfigured(self, tmp_registry_path: Path):
+        """Catalog text should show model count for unconfigured providers with models."""
+
+        data = {
+            "version": 1,
+            "active_provider": "minimax",
+            "active_model": "MiniMax-M2.5",
+            "providers": {
+                "openrouter": {
+                    "available": False,
+                    "env_key": "OPENROUTER_API_KEY",
+                    "models": [
+                        {"id": "model-a:free", "name": "Model A"},
+                        {"id": "model-b:free", "name": "Model B"},
+                        {"id": "model-c:free", "name": "Model C"},
+                    ],
+                },
+            },
+        }
+        registry = _make_registry_from_data(tmp_registry_path, data)
+        text = registry.get_catalog_text()
+        assert "3 models available" in text

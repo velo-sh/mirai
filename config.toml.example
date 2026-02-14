@@ -44,3 +44,24 @@ duckdb_path = "mirai_hdd.duckdb"
 [agent]
 # Collaborator ULID — the identity this agent runs as
 collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
+
+[registry]
+# Seconds between automatic model registry refreshes (default: 300)
+refresh_interval = 300
+
+# =============================================================================
+# Free LLM Providers
+#
+# Mirai auto-discovers free providers when the corresponding API key is set.
+# Each provider uses an OpenAI-compatible endpoint — just export the key:
+#
+#   export GROQ_API_KEY="gsk_..."          # https://console.groq.com
+#   export OPENROUTER_API_KEY="sk-or-..."  # https://openrouter.ai/keys
+#   export CEREBRAS_API_KEY="csk-..."      # https://cloud.cerebras.ai
+#   export MISTRAL_API_KEY="..."           # https://console.mistral.ai
+#   export SAMBANOVA_API_KEY="..."         # https://cloud.sambanova.ai
+#   export CHUTES_API_KEY="..."            # https://chutes.ai
+#
+# No config.toml changes needed — set the env var and restart Mirai.
+# Use `mirai_system set_active_model` to switch to any discovered free model.
+# =============================================================================
