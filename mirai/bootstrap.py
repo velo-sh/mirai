@@ -183,6 +183,10 @@ class MiraiApp:
                 config_provider=config.llm.provider,
                 config_model=config.llm.default_model,
             )
+            # Wire external enrichment source (models.dev metadata)
+            from mirai.agent.models_dev import ModelsDevSource
+
+            self.registry.set_enrichment_source(ModelsDevSource())
 
             # Use persisted active model/provider if available, fall back to config
             effective_provider = self.registry.active_provider

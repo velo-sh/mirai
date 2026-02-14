@@ -22,7 +22,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from mirai.agent.registry_models import (
     RegistryData,
@@ -31,7 +31,19 @@ from mirai.agent.registry_models import (
 )
 from mirai.logging import get_logger
 
+if TYPE_CHECKING:
+    pass
+
 log = get_logger("mirai.registry")
+
+
+@runtime_checkable
+class EnrichmentSource(Protocol):
+    """Protocol for external model metadata enrichment sources."""
+
+    async def fetch(self) -> dict[str, Any]: ...
+    def enrich(self, entry: RegistryModelEntry, provider: str) -> RegistryModelEntry: ...
+
 
 # Provider name → (env var for API key, import path for provider class)
 _PROVIDER_SPECS: list[tuple[str, str, str]] = [
@@ -52,6 +64,26 @@ def _import_provider_class(import_path: str) -> type | None:
     except Exception as exc:
         log.warning("provider_import_failed", path=import_path, error=str(exc))
         return None
+
+
+def _format_context(ctx: int | None) -> str:
+    """Format context window as human-readable string (e.g. 200K, 1M)."""
+    if ctx is None:
+        return ""
+    if ctx >= 1_000_000:
+        return f"{ctx / 1_000_000:.0f}M ctx"
+    if ctx >= 1_000:
+        return f"{ctx / 1_000:.0f}K ctx"
+    return f"{ctx} ctx"
+
+
+def _format_pricing(inp: float | None, out: float | None) -> str:
+    """Format pricing as '$in/$out per 1M tokens'."""
+    if inp is None and out is None:
+        return ""
+    ip = f"${inp:.2f}" if inp is not None else "?"
+    op = f"${out:.2f}" if out is not None else "?"
+    return f"{ip}/{op}"
 
 
 class ModelRegistry:
@@ -75,14 +107,17 @@ class ModelRegistry:
         """
         self._config_provider = config_provider
         self._config_model = config_model
-        loaded = self._load()
-        if isinstance(loaded, dict):
-            # Compatibility with brittle mocks returning dict
-            from mirai.agent.registry_models import RegistryData
+        self._data: RegistryData = self._load()
+        self._enrichment_source: EnrichmentSource | None = None
 
-            self._data: RegistryData = RegistryData.from_dict(loaded)
-        else:
-            self._data = loaded
+    def set_enrichment_source(self, source: EnrichmentSource) -> None:
+        """Register an external metadata enrichment source.
+
+        Call this before the first ``refresh()`` to enable automatic
+        enrichment of discovered models with external data (e.g. pricing,
+        context limits).
+        """
+        self._enrichment_source = source
 
     # ------------------------------------------------------------------
     # Load / Save
@@ -139,63 +174,113 @@ class ModelRegistry:
         a remote API (OpenAI) or return a static catalog (Anthropic,
         MiniMax).
 
+        If an enrichment source (e.g. ModelsDevSource) is configured,
+        fills in any missing metadata fields (provider-native data wins).
+
         Uses copy-on-write: builds a new providers dict, then atomically
         swaps ``self._data``.
+
+        The enrichment fetch runs **concurrently** with provider scanning
+        so slow external APIs never block discovery.
         """
-        new_providers: dict[str, RegistryProviderData] = {}
 
-        for pname, env_key, import_path in _PROVIDER_SPECS:
-            api_key = os.getenv(env_key)
-            if not api_key:
-                # Keep existing model info but mark unavailable
-                existing = self._data.providers.get(pname)
-                new_providers[pname] = RegistryProviderData(
-                    available=False,
-                    env_key=env_key,
-                    models=existing.models if existing else [],
-                )
-                continue
-
-            # Try to instantiate provider and call list_models()
-            try:
-                cls = _import_provider_class(import_path)
-                if cls is None:
-                    continue
-
-                provider = cls(api_key=api_key)
-                models = await provider.list_models()
-                new_providers[pname] = RegistryProviderData(
-                    available=True,
-                    env_key=env_key,
-                    models=[
-                        RegistryModelEntry(
-                            id=m.id,
-                            name=m.name,
-                            description=m.description,
-                            reasoning=m.reasoning,
-                            vision=getattr(m, "supports_vision", False),
-                        )
-                        for m in models
-                    ],
-                )
-                log.info("registry_provider_refreshed", provider=pname, model_count=len(models))
-            except Exception as exc:
-                log.warning("registry_refresh_failed", provider=pname, error=str(exc))
-                # Keep last known state on failure
-                existing = self._data.providers.get(pname)
-                new_providers[pname] = (
-                    existing
-                    if existing
-                    else RegistryProviderData(
+        # ------------------------------------------------------------------
+        # Phase 1: Scan providers + fetch enrichment data concurrently
+        # ------------------------------------------------------------------
+        async def _scan_providers() -> dict[str, RegistryProviderData]:
+            result: dict[str, RegistryProviderData] = {}
+            for pname, env_key, import_path in _PROVIDER_SPECS:
+                api_key = os.getenv(env_key)
+                if not api_key:
+                    existing = self._data.providers.get(pname)
+                    result[pname] = RegistryProviderData(
                         available=False,
                         env_key=env_key,
-                        models=[],
+                        models=existing.models if existing else [],
                     )
+                    continue
+
+                try:
+                    cls = _import_provider_class(import_path)
+                    if cls is None:
+                        continue
+
+                    provider = cls(api_key=api_key)
+                    raw_models = await provider.list_models()
+                    models = [RegistryModelEntry.from_model_info(m) for m in raw_models]
+                    result[pname] = RegistryProviderData(
+                        available=True,
+                        env_key=env_key,
+                        models=models,
+                    )
+                    log.info("registry_provider_refreshed", provider=pname, model_count=len(models))
+                except Exception as exc:
+                    log.warning("registry_refresh_failed", provider=pname, error=str(exc))
+                    existing = self._data.providers.get(pname)
+                    result[pname] = (
+                        existing
+                        if existing
+                        else RegistryProviderData(
+                            available=False,
+                            env_key=env_key,
+                            models=[],
+                        )
+                    )
+            return result
+
+        async def _fetch_enrichment() -> dict[str, Any]:
+            if self._enrichment_source is None:
+                return {}
+            try:
+                return await asyncio.wait_for(
+                    self._enrichment_source.fetch(),
+                    timeout=20,
                 )
+            except TimeoutError:
+                log.warning("enrichment_fetch_timeout")
+                return {}
+            except Exception as exc:
+                log.warning("enrichment_fetch_failed", error=str(exc))
+                return {}
+
+        # Run both concurrently — enrichment never blocks provider scanning
+        new_providers, enrichment_data = await asyncio.gather(
+            _scan_providers(),
+            _fetch_enrichment(),
+        )
+
+        # ------------------------------------------------------------------
+        # Phase 2: Enrich models with external data (fast, in-memory only)
+        # ------------------------------------------------------------------
+        enriched_count = 0
+        total_count = 0
+        if self._enrichment_source is not None and enrichment_data:
+            for pname, pdata in new_providers.items():
+                if not pdata.models:
+                    continue
+                enriched_models = []
+                for m in pdata.models:
+                    total_count += 1
+                    before_price = m.input_price
+                    enriched_m = self._enrichment_source.enrich(m, pname)
+                    if enriched_m.input_price != before_price or enriched_m.context_window is not None:
+                        enriched_count += 1
+                    enriched_models.append(enriched_m)
+                # Copy-on-write: create new RegistryProviderData
+                new_providers[pname] = RegistryProviderData(
+                    available=pdata.available,
+                    env_key=pdata.env_key,
+                    models=enriched_models,
+                )
+            log.info(
+                "enrichment_applied",
+                enriched=enriched_count,
+                total=total_count,
+            )
 
         # Atomic swap (copy-on-write)
         new_data = RegistryData(
-            version=getattr(self._data, "version", 1),
+            version=self._data.version,
             last_refreshed=datetime.now(UTC).isoformat(),
             active_provider=self.active_provider,
             active_model=self.active_model,
@@ -211,18 +296,12 @@ class ModelRegistry:
     @property
     def active_provider(self) -> str:
         """Resolve active provider: registry (runtime) > config.toml (default)."""
-        data = self._data
-        if isinstance(data, dict):
-            return data.get("active_provider") or self._config_provider or "unknown"
-        return data.active_provider or self._config_provider or "unknown"
+        return self._data.active_provider or self._config_provider or "unknown"
 
     @property
     def active_model(self) -> str:
         """Resolve active model: registry (runtime) > config.toml (default)."""
-        data = self._data
-        if isinstance(data, dict):
-            return data.get("active_model") or self._config_model or "unknown"
-        return data.active_model or self._config_model or "unknown"
+        return self._data.active_model or self._config_model or "unknown"
 
     def get_catalog_text(self, quota_data: dict[str, float] | None = None) -> str:
         """Format the full model catalog as human-readable text.
@@ -238,21 +317,10 @@ class ModelRegistry:
             f"Current model: {self.active_model}",
         ]
 
-        if isinstance(self._data, dict):
-            last_refreshed = self._data.get("last_refreshed")
-            providers = self._data.get("providers", {})
-        else:
-            last_refreshed = self._data.last_refreshed
-            providers = self._data.providers
+        if self._data.last_refreshed:
+            lines.append(f"Last refreshed: {self._data.last_refreshed}")
 
-        if last_refreshed:
-            lines.append(f"Last refreshed: {last_refreshed}")
-
-        available_providers = {
-            k: v
-            for k, v in providers.items()
-            if (v.get("available") if isinstance(v, dict) else getattr(v, "available", False))
-        }
+        available_providers = {k: v for k, v in self._data.providers.items() if v.available}
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
@@ -264,31 +332,51 @@ class ModelRegistry:
             is_active = pname == self.active_provider
             lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
 
-            models = pdata.get("models", []) if isinstance(pdata, dict) else pdata.models
-            if not models:
+            if not pdata.models:
                 lines.append("  (no models discovered)")
                 continue
-            for m in models:
-                mid = m.get("id") if isinstance(m, dict) else m.id
-                mname = m.get("name") if isinstance(m, dict) else m.name
-                mdesc = m.get("description") if isinstance(m, dict) else m.description
-                mreasoning = m.get("reasoning") if isinstance(m, dict) else m.reasoning
-                mvision = m.get("vision") if isinstance(m, dict) else m.vision
 
-                marker = " ← current" if (is_active and mid == self.active_model) else ""
-                desc = f"  - {mid}: {mdesc or mname}"
-                if mreasoning:
-                    desc += " [reasoning]"
-                if mvision:
-                    desc += " [vision]"
-                # Annotate quota status if available
-                if quota_data and mid in quota_data:
-                    pct = quota_data[mid]
+            for m in pdata.models:
+                marker = " ← current" if (is_active and m.id == self.active_model) else ""
+
+                # Main line: id + description + capability tags
+                tags = []
+                if m.reasoning:
+                    tags.append("reasoning")
+                if m.vision:
+                    tags.append("vision")
+                if m.supports_tool_use:
+                    tags.append("tool_use")
+                if m.supports_json_mode:
+                    tags.append("json_mode")
+
+                tag_str = " ".join(f"[{t}]" for t in tags)
+                desc = f"  - {m.id}: {m.description or m.name}"
+                if tag_str:
+                    desc += f" {tag_str}"
+
+                # Quota annotation
+                if quota_data and m.id in quota_data:
+                    pct = quota_data[m.id]
                     if pct >= 100.0:
                         desc += " ⚠️ exhausted"
                     elif pct >= 80.0:
                         desc += f" ({pct:.0f}% used)"
+
                 lines.append(desc + marker)
+
+                # Detail line: context + pricing + cutoff
+                details = []
+                ctx = _format_context(m.context_window)
+                if ctx:
+                    details.append(ctx)
+                pricing = _format_pricing(m.input_price, m.output_price)
+                if pricing:
+                    details.append(pricing)
+                if m.knowledge_cutoff:
+                    details.append(f"cutoff {m.knowledge_cutoff}")
+                if details:
+                    lines.append(f"    {' · '.join(details)}")
 
         return "\n".join(lines)
 
@@ -301,26 +389,22 @@ class ModelRegistry:
 
         Returns the provider name (e.g. 'minimax', 'anthropic') or None.
         """
-        providers = self._data.get("providers", {}) if isinstance(self._data, dict) else self._data.providers
-        for pname, pdata in providers.items():
-            available = pdata.get("available") if isinstance(pdata, dict) else pdata.available
-            if not available:
+        for pname, pdata in self._data.providers.items():
+            if not pdata.available:
                 continue
-            models = pdata.get("models", []) if isinstance(pdata, dict) else pdata.models
-            for m in models:
-                mid = m.get("id") if isinstance(m, dict) else m.id
-                if mid == model_id:
+            for m in pdata.models:
+                if m.id == model_id:
                     return pname
         return None
 
     async def set_active(self, provider: str, model: str) -> None:
         """Set the active provider + model (runtime override). Persists to disk."""
         new_data = RegistryData(
-            version=getattr(self._data, "version", 1),
-            last_refreshed=getattr(self._data, "last_refreshed", None),
+            version=self._data.version,
+            last_refreshed=self._data.last_refreshed,
             active_provider=provider,
             active_model=model,
-            providers=getattr(self._data, "providers", {}),
+            providers=self._data.providers,
         )
         self._data = new_data
         self._save()

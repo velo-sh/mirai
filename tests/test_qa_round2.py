@@ -10,7 +10,6 @@ Coverage areas:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -136,26 +135,29 @@ class TestQuotaDataWiringEdgeCases:
     def registry(self, tmp_path):
         """Build a ModelRegistry with sample data."""
         from mirai.agent.registry import ModelRegistry
+        from mirai.agent.registry_models import RegistryData
 
         reg = ModelRegistry.__new__(ModelRegistry)
         reg._path = tmp_path / "registry.json"
-        reg._data = {
-            "last_refreshed": "2025-01-01T00:00:00Z",
-            "active_provider": "minimax",
-            "active_model": "MiniMax-M2.5",
-            "providers": {
-                "minimax": {
-                    "available": True,
-                    "models": [
-                        {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Advanced"},
-                        {"id": "MiniMax-VL-01", "name": "MiniMax VL-01", "description": "Vision"},
-                    ],
+        reg._data = RegistryData.from_dict(
+            {
+                "last_refreshed": "2025-01-01T00:00:00Z",
+                "active_provider": "minimax",
+                "active_model": "MiniMax-M2.5",
+                "providers": {
+                    "minimax": {
+                        "available": True,
+                        "models": [
+                            {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Advanced"},
+                            {"id": "MiniMax-VL-01", "name": "MiniMax VL-01", "description": "Vision"},
+                        ],
+                    },
                 },
-            },
-        }
+            }
+        )
         reg._config_provider = "minimax"
         reg._config_model = "MiniMax-M2.5"
-        reg._lock = asyncio.Lock()
+        reg._enrichment_source = None
         return reg
 
     @pytest.mark.asyncio
@@ -746,23 +748,26 @@ class TestListModelsDispatch:
     async def test_execute_list_models_action(self):
         """execute(action='list_models') should call _list_models and return a string."""
         from mirai.agent.registry import ModelRegistry
+        from mirai.agent.registry_models import RegistryData
         from mirai.agent.tools.system import SystemTool
 
         reg = ModelRegistry.__new__(ModelRegistry)
         reg._path = Path("/tmp/test_reg.json")
-        reg._data = {
-            "active_provider": "mock",
-            "active_model": "mock-model",
-            "providers": {
-                "mock": {
-                    "available": True,
-                    "models": [{"id": "mock-model", "name": "Mock Model", "description": "Test"}],
+        reg._data = RegistryData.from_dict(
+            {
+                "active_provider": "mock",
+                "active_model": "mock-model",
+                "providers": {
+                    "mock": {
+                        "available": True,
+                        "models": [{"id": "mock-model", "name": "Mock Model", "description": "Test"}],
+                    },
                 },
-            },
-        }
+            }
+        )
         reg._config_provider = "mock"
         reg._config_model = "mock-model"
-        reg._lock = asyncio.Lock()
+        reg._enrichment_source = None
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")
@@ -774,23 +779,26 @@ class TestListModelsDispatch:
     async def test_list_models_shows_active_provider(self):
         """Catalog text should indicate the active provider."""
         from mirai.agent.registry import ModelRegistry
+        from mirai.agent.registry_models import RegistryData
         from mirai.agent.tools.system import SystemTool
 
         reg = ModelRegistry.__new__(ModelRegistry)
         reg._path = Path("/tmp/test_reg2.json")
-        reg._data = {
-            "active_provider": "minimax",
-            "active_model": "M2.5",
-            "providers": {
-                "minimax": {
-                    "available": True,
-                    "models": [{"id": "M2.5", "name": "M2.5", "description": "Test"}],
+        reg._data = RegistryData.from_dict(
+            {
+                "active_provider": "minimax",
+                "active_model": "M2.5",
+                "providers": {
+                    "minimax": {
+                        "available": True,
+                        "models": [{"id": "M2.5", "name": "M2.5", "description": "Test"}],
+                    },
                 },
-            },
-        }
+            }
+        )
         reg._config_provider = "minimax"
         reg._config_model = "M2.5"
-        reg._lock = asyncio.Lock()
+        reg._enrichment_source = None
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")
