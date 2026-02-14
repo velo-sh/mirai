@@ -110,8 +110,12 @@ class MiraiApp:
             log.info("background_tasks_cancelled", count=len(self._tasks))
             self._tasks.clear()
 
+        # Stop background services
+        if self.dreamer:
+            await self.dreamer.stop()
         if self.heartbeat:
             await self.heartbeat.stop()
+
         if self.agent and hasattr(self.agent, "l3_storage") and self.agent.l3_storage:
             try:
                 self.agent.l3_storage.close()
@@ -399,6 +403,9 @@ class MiraiApp:
         """Start the Dreamer background service."""
         if not self.agent:
             return
-        dream_interval = int(os.getenv("MIRAI_DREAM_INTERVAL", "3600"))
-        self.dreamer = AgentDreamer(self.agent, self.agent.l3_storage, interval_seconds=dream_interval)
+        self.dreamer = AgentDreamer(
+            self.agent,
+            self.agent.l3_storage,
+            interval_seconds=config.dreamer.interval,
+        )
         self.dreamer.start(loop=asyncio.get_running_loop())
