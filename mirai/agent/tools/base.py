@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from mirai.agent.providers.base import ProviderProtocol
     from mirai.agent.registry import ModelRegistry
     from mirai.config import MiraiConfig
+    from mirai.cron import CronScheduler
     from mirai.db.duck import DuckDBStorage
 
 
@@ -22,6 +23,7 @@ class ToolContext:
     agent_loop: AgentLoop | None = None
     provider: ProviderProtocol | None = None
     storage: DuckDBStorage | None = None
+    cron_scheduler: CronScheduler | None = None
     start_time: float = field(default_factory=time.monotonic)
 
 

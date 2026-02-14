@@ -228,6 +228,7 @@ class MiraiApp:
                 config=config,
                 registry=self.registry,
                 provider=provider,
+                cron_scheduler=getattr(self, "cron", None),
                 start_time=self.start_time,
             )
 
