@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.memory import MemorizeTool
 from mirai.collaborator.manager import CollaboratorManager

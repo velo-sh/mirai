@@ -2,8 +2,8 @@
 
 import asyncio
 
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.im.base import BaseIMProvider
-from mirai.agent.loop import AgentLoop
 from mirai.logging import get_logger
 
 log = get_logger("mirai.heartbeat")
@@ -22,16 +22,16 @@ class HeartbeatManager:
         self.im_provider = im_provider
         self.chat_id = chat_id
         self.is_running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
-    async def start(self):
+    async def start(self) -> None:
         if self.is_running:
             return
         self.is_running = True
         self._task = asyncio.create_task(self._loop())
         log.info("heartbeat_started", collaborator=self.agent.name, interval=self.interval)
 
-    async def _loop(self):
+    async def _loop(self) -> None:
         while self.is_running:
             try:
                 # Wait for interval
@@ -62,7 +62,7 @@ class HeartbeatManager:
                 log.error("heartbeat_error", error=str(e))
                 await asyncio.sleep(60)  # Wait before retry
 
-    async def stop(self):
+    async def stop(self) -> None:
         self.is_running = False
         if self._task:
             self._task.cancel()

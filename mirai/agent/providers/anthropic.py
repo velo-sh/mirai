@@ -19,6 +19,7 @@ from tenacity import (
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.logging import get_logger
+from mirai.tracing import get_tracer
 
 log = get_logger("mirai.providers.anthropic")
 
@@ -81,6 +82,12 @@ class AnthropicProvider:
         self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
         self.model = model
 
+    def config_dict(self) -> dict[str, Any]:
+        """Return provider configuration as a dictionary."""
+        return {
+            "max_tokens": getattr(self, "_max_tokens", 4096),
+        }
+
     @property
     def provider_name(self) -> str:
         return "anthropic"
@@ -104,31 +111,48 @@ class AnthropicProvider:
         ),
     )
     async def generate_response(
-        self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        model: str,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> ProviderResponse:
         # Convert OpenAI-format messages to Anthropic format
         anthropic_messages = self._convert_messages(messages)
         anthropic_tools = self._convert_tools(tools)
 
-        response = await self.client.messages.create(
-            model=model,
-            system=system,
-            messages=anthropic_messages,  # type: ignore[arg-type]
-            tools=anthropic_tools,  # type: ignore[arg-type]
-            max_tokens=4096,
-        )
-        # Convert Anthropic SDK response to our Pydantic model
-        content_blocks: list[TextBlock | ToolUseBlock] = []
-        for block in response.content:
-            if block.type == "text":
-                content_blocks.append(TextBlock(text=block.text))
-            elif block.type == "tool_use":
-                content_blocks.append(
-                    ToolUseBlock(id=block.id, name=block.name, input=block.input)  # type: ignore[arg-type]
-                )
-        return ProviderResponse(
-            content=content_blocks, stop_reason=response.stop_reason or "end_turn", model_id=response.model
-        )
+        tracer = get_tracer()
+        with tracer.start_as_current_span("provider.anthropic.generate") as span:
+            span.set_attribute("llm.model", model)
+
+            request_params = {
+                "model": model,
+                "system": system,
+                "messages": anthropic_messages,
+                "tools": anthropic_tools,
+                "max_tokens": kwargs.pop("max_tokens", getattr(self, "_max_tokens", 4096)),
+                **kwargs,
+            }
+            response = await self.client.messages.create(**request_params)  # type: ignore[arg-type]
+
+            if hasattr(response, "usage") and response.usage:
+                span.set_attribute("llm.usage.prompt_tokens", response.usage.input_tokens)
+                span.set_attribute("llm.usage.completion_tokens", response.usage.output_tokens)
+                span.set_attribute("llm.usage.total_tokens", response.usage.input_tokens + response.usage.output_tokens)
+
+            # Convert Anthropic SDK response to our Pydantic model
+            content_blocks: list[TextBlock | ToolUseBlock] = []
+            for block in response.content:
+                if block.type == "text":
+                    content_blocks.append(TextBlock(text=block.text))
+                elif block.type == "tool_use":
+                    content_blocks.append(
+                        ToolUseBlock(id=block.id, name=block.name, input=block.input)  # type: ignore[arg-type]
+                    )
+            return ProviderResponse(
+                content=content_blocks, stop_reason=response.stop_reason or "end_turn", model_id=response.model
+            )
 
     # ------------------------------------------------------------------
     # OpenAI → Anthropic format conversion
@@ -155,16 +179,18 @@ class AnthropicProvider:
 
             if role == "tool":
                 # Convert OpenAI tool result to Anthropic format
-                result.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": msg.get("tool_call_id", ""),
-                            "content": msg.get("content", ""),
-                        }
-                    ],
-                })
+                result.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": msg.get("content", ""),
+                            }
+                        ],
+                    }
+                )
             elif role == "assistant":
                 content_blocks: list[dict[str, Any]] = []
                 # Add text content
@@ -178,16 +204,20 @@ class AnthropicProvider:
                         args = json.loads(fn.get("arguments", "{}"))
                     except (json.JSONDecodeError, TypeError):
                         args = {}
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tc.get("id", ""),
-                        "name": fn.get("name", ""),
-                        "input": args,
-                    })
-                result.append({
-                    "role": "assistant",
-                    "content": content_blocks if content_blocks else "",
-                })
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id", ""),
+                            "name": fn.get("name", ""),
+                            "input": args,
+                        }
+                    )
+                result.append(
+                    {
+                        "role": "assistant",
+                        "content": content_blocks if content_blocks else "",
+                    }
+                )
             else:
                 # user messages pass through
                 result.append(msg)

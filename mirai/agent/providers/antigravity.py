@@ -121,6 +121,13 @@ class AntigravityProvider:
         self.credentials: dict[str, Any] = loaded
         self.model = model
         self._http = httpx.AsyncClient(timeout=120.0, http2=True)
+        self._max_tokens = 4096
+
+    def config_dict(self) -> dict[str, Any]:
+        """Return provider configuration as a dictionary."""
+        return {
+            "max_tokens": self._max_tokens,
+        }
 
     # ------------------------------------------------------------------
     # Provider identity & discovery
@@ -237,6 +244,7 @@ class AntigravityProvider:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> ProviderResponse:
         tracer = get_tracer()
         with tracer.start_as_current_span("provider.antigravity.generate") as span:
@@ -272,7 +280,16 @@ class AntigravityProvider:
                 available = sorted(self.quota_manager._quotas.keys()) or list(MODEL_MAP.values())
                 raise ValueError(f"Model '{model}' is not available. Available models: {', '.join(available)}")
 
-            body = self._build_request(effective_model, system, messages, tools)
+            body = self._build_request(
+                effective_model,
+                system,
+                messages,
+                tools,
+                max_tokens=kwargs.pop("max_tokens", self._max_tokens),
+            )
+            # Apply remaining kwargs if any (though CCA might not support them yet)
+            if kwargs:
+                body["request"].update(kwargs)
             headers = self._build_headers()
 
             # orjson.dumps returns bytes — httpx accepts bytes directly (no decode overhead)

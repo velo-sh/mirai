@@ -4,10 +4,14 @@ from mirai.agent.tools.base import BaseTool
 
 
 class MemorizeTool(BaseTool):
-    def __init__(self, collaborator_id: str, vector_store: Any | None = None, l3_storage: Any | None = None):
-        self.collaborator_id = collaborator_id
-        self.vector_store = vector_store
-        self.l3_storage = l3_storage
+    def __init__(self, context: Any = None) -> None:
+        super().__init__(context)
+        # Convenience aliases
+        self.collaborator_id = (
+            self.context.config.agent.collaborator_id if self.context and self.context.config else "unknown"
+        )
+        self.l3_storage = self.context.storage if self.context else None
+        self.l2_storage = self.context.agent_loop.l2_storage if self.context and self.context.agent_loop else None
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -30,20 +34,22 @@ class MemorizeTool(BaseTool):
         }
 
     async def execute(self, content: str, importance: float) -> str:  # type: ignore[override]
-        # 1. Archive to L3 (HDD) using DuckDB
         from ulid import ULID
+
         from mirai.db.duck import DuckDBStorage
+        from mirai.db.models import DBTrace
 
         l3 = self.l3_storage or DuckDBStorage()
-        trace_id = str(ULID())
-        await l3.append_trace(
-            id=trace_id,
+        trace = DBTrace(
+            id=str(ULID()),
             collaborator_id=self.collaborator_id,
             trace_type="insight",
             content=content,
             importance=importance,
-            metadata={"source": "manual_memorize"},
+            metadata_json={"source": "manual_memorize"},
         )
+        await l3.append_trace(trace)
+        trace_id = trace.id
 
         # 2. Index in L2 (RAM - Vector Store)
         from mirai.agent.providers import MockEmbeddingProvider
@@ -52,7 +58,7 @@ class MemorizeTool(BaseTool):
         embedder = MockEmbeddingProvider()
         vector = await embedder.get_embeddings(content)
 
-        vdb = self.vector_store or VectorStore()
+        vdb = self.l2_storage or VectorStore()
         entry = MemoryEntry(
             content=content,
             metadata={"trace_id": trace_id},

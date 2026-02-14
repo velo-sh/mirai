@@ -11,7 +11,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import main as main_module
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.workspace import WorkspaceTool

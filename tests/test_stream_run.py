@@ -7,7 +7,7 @@ without going through HTTP/WebSocket (those are in test_app_layer.py).
 import pytest
 import pytest_asyncio
 
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 

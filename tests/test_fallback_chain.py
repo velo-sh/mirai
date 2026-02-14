@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mirai.agent.loop import AgentLoop, RefinedStep
+from mirai.agent.agent_loop import AgentLoop, RefinedStep
 from mirai.agent.models import ProviderResponse, TextBlock
 
 # ---------------------------------------------------------------------------

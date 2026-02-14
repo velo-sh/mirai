@@ -1,19 +1,16 @@
 import asyncio
 import json
-import os
-import shutil
 
-from mirai.agent.loop import AgentLoop
+import pytest
+
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
+from mirai.db.duck import DuckDBStorage
 from mirai.db.session import init_db
 from mirai.memory.dreamer import Dreamer
 from mirai.memory.vector_db import VectorStore
 
-
-import pytest
-from mirai.db.duck import DuckDBStorage
-from mirai.memory.vector_db import VectorStore
 
 @pytest.mark.asyncio
 async def test_dreaming_flow(tmp_path):
@@ -22,31 +19,32 @@ async def test_dreaming_flow(tmp_path):
     # Use temp paths
     db_path = str(tmp_path / "test_dreamer.duckdb")
     l3 = DuckDBStorage(db_path=db_path)
-    
+
     # Vector store might need similar handling but let's assume it's okay or mock it if possible.
     # Actually VectorStore init uses lancedb.connect("mirai_vectors"). check if we can override.
     # VectorStore def __init__(self, uri="mirai_vectors")
     l2_path = str(tmp_path / "mirai_vectors")
     l2 = VectorStore(db_path=l2_path)
-    
+
     await init_db()
 
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     provider = MockProvider()
     tools = [EchoTool()]
-    
+
     from unittest.mock import AsyncMock
+
     mock_embedder = AsyncMock()
     mock_embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
-    
+
     # Inject storage
     agent = await AgentLoop.create(
-        provider=provider, 
-        tools=tools, 
+        provider=provider,
+        tools=tools,
         collaborator_id=collaborator_id,
         l3_storage=l3,
         l2_storage=l2,
-        embedder=mock_embedder
+        embedder=mock_embedder,
     )
 
     # 1. First interaction (NOT memorized explicitly)

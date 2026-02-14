@@ -24,13 +24,11 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from mirai.agent.providers.base import ProviderProtocol
-from mirai.agent.tools.base import BaseTool
+from mirai.agent.tools.base import BaseTool, ToolContext
 from mirai.logging import get_logger
 
 if TYPE_CHECKING:
-    from mirai.agent.loop import AgentLoop
-    from mirai.agent.registry import ModelRegistry
+    pass
 
 log = get_logger("mirai.tools.system")
 
@@ -71,19 +69,14 @@ def _serialize_toml(data: dict[str, Any]) -> str:
 class SystemTool(BaseTool):
     """Self-evolution tool: status, patch_config, restart."""
 
-    def __init__(
-        self,
-        config: Any | None = None,
-        start_time: float | None = None,
-        provider: ProviderProtocol | None = None,
-        registry: ModelRegistry | None = None,
-        agent_loop: AgentLoop | None = None,
-    ):
-        self._config = config
-        self._start_time = start_time or time.monotonic()
-        self._provider = provider
-        self._registry = registry
-        self._agent_loop = agent_loop
+    def __init__(self, context: ToolContext | None = None):
+        super().__init__(context)
+        # Convenience aliases
+        self._config = self.context.config
+        self._start_time = self.context.start_time
+        self._provider = self.context.provider
+        self._registry = self.context.registry
+        self._agent_loop = self.context.agent_loop
 
     @property
     def definition(self) -> dict[str, Any]:
@@ -95,7 +88,8 @@ class SystemTool(BaseTool):
                 "'usage' (per-model quota usage and reset times), "
                 "'list_models' (discover all available models across providers), "
                 "'set_active_model' (switch to a different model at runtime), "
-                "'patch_config' (modify whitelisted config keys), "
+                "'patch_config' (modify whitelisted config keys on disk), "
+                "'patch_runtime' (volatile hyperparameter overrides like temperature), "
                 "'restart' (graceful self-restart)."
             ),
             "input_schema": {
@@ -103,7 +97,15 @@ class SystemTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "usage", "list_models", "set_active_model", "patch_config", "restart"],
+                        "enum": [
+                            "status",
+                            "usage",
+                            "list_models",
+                            "set_active_model",
+                            "patch_config",
+                            "patch_runtime",
+                            "restart",
+                        ],
                         "description": "The action to perform.",
                     },
                     "model": {
@@ -140,6 +142,8 @@ class SystemTool(BaseTool):
             return await self._set_active_model(model)
         elif action == "patch_config":
             return await self._patch_config(patch or {})
+        elif action == "patch_runtime":
+            return await self._patch_runtime(patch or {})
         elif action == "restart":
             return await self._restart()
         else:
@@ -357,6 +361,30 @@ class SystemTool(BaseTool):
             f"File: {_CONFIG_PATH}\n"
             "Note: Some changes require a restart to take effect. "
             "Use action='restart' if needed."
+        )
+
+    # ------------------------------------------------------------------
+    # Action: patch_runtime
+    # ------------------------------------------------------------------
+    async def _patch_runtime(self, patch: dict[str, Any]) -> str:
+        """Apply volatile hyperparameter overrides to the active AgentLoop."""
+        if not patch:
+            return "Error: 'patch' parameter is required for patch_runtime."
+        if not self._agent_loop:
+            return "Error: Agent loop not available for runtime patching."
+
+        allowed = {"temperature", "max_tokens", "top_p", "top_k", "presence_penalty"}
+        overrides = {k: v for k, v in patch.items() if k in allowed}
+        if not overrides:
+            return f"Error: No valid keys provided for patch_runtime. Allowed: {', '.join(sorted(allowed))}"
+
+        # Update the volatile overrides in the loop
+        self._agent_loop.runtime_overrides.update(overrides)
+
+        log.info("runtime_config_patched", overrides=overrides)
+        return (
+            f"✅ Runtime configuration patched (volatile): {overrides}.\n"
+            "These changes take effect immediately but will be lost if the agent restarts."
         )
 
     # ------------------------------------------------------------------

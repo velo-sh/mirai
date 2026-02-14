@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.editor import EditorTool
 from mirai.agent.tools.shell import ShellTool

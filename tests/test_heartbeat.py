@@ -1,27 +1,27 @@
 import asyncio
+from unittest.mock import AsyncMock
 
+import pytest
+
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.heartbeat import HeartbeatManager
-from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.workspace import WorkspaceTool
 from mirai.db.session import init_db
 
 
-import pytest
-from unittest.mock import AsyncMock
-
 @pytest.mark.asyncio
 async def test_heartbeat(tmp_path):
     print("--- Starting Heartbeat Logic Test ---")
-    
+
     # Use temp db
     db_path = tmp_path / "test_heartbeat.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    
+
     # Initialize DB (this sets the global engine in session.py)
     await init_db(db_url)
-    
-    # IMPORTANT: We must also patch where get_session gets its engine if it doesn't use the global one? 
+
+    # IMPORTANT: We must also patch where get_session gets its engine if it doesn't use the global one?
     # session.py uses global _engine. init_db sets it. So this should work if we ensure isolation.
     # To be safe, we must ensure init_db REUSABLE or resets.
     # session.py _get_engine checks if _engine is None.
@@ -29,7 +29,7 @@ async def test_heartbeat(tmp_path):
     # We should probably reset it. But session.py doesn't have reset.
     # For now, let's assume this test runs isolated or we patch _get_engine.
     # Actually, let's just use the default ./mirai.db but delete it first?
-    # No, risky. 
+    # No, risky.
     # Let's try to trust init_db updates the engine if we call it?
     # session.py: if _engine is None: create...
     # It does NOT update if already set.
@@ -38,29 +38,30 @@ async def test_heartbeat(tmp_path):
     # If previous tests initialized ./mirai.db, it should exist.
     # If this test initializes it, it should exist.
     # The failures "OperationalError" often happen with concurrency on SQLite.
-    
+
     # Let's try to force reset the engine variable in session module
     from mirai.db import session
+
     if session._engine:
         await session._engine.dispose()
         session._engine = None
         session._async_session = None
-        
+
     await init_db(db_url)
 
     # Initialize components
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [WorkspaceTool()]
-    
+
     # Use mocks
     agent = await AgentLoop.create(
-        provider=provider, 
-        tools=tools, 
+        provider=provider,
+        tools=tools,
         collaborator_id=collaborator_id,
         l3_storage=AsyncMock(),
         l2_storage=AsyncMock(),
-        embedder=AsyncMock()
+        embedder=AsyncMock(),
     )
     agent.embedder.get_embeddings = AsyncMock(return_value=[0.0] * 1536)
 

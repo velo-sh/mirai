@@ -40,8 +40,16 @@ class MockProvider:
     async def get_usage(self) -> UsageSnapshot:
         return UsageSnapshot(provider="mock", error="not supported")
 
+    def config_dict(self) -> dict[str, Any]:
+        return {}
+
     async def generate_response(
-        self, model: str, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        model: str,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> ProviderResponse:
         self.call_count += 1
 
@@ -215,10 +223,7 @@ class MockProvider:
 
         In OpenAI format, tool results are: {"role": "tool", "tool_call_id": "...", "content": "..."}
         """
-        return [
-            m for m in messages
-            if m.get("role") == "tool" and m.get("tool_call_id") == tool_call_id
-        ]
+        return [m for m in messages if m.get("role") == "tool" and m.get("tool_call_id") == tool_call_id]
 
     @staticmethod
     def _has_tool_call(messages: list[dict[str, Any]], tool_name: str) -> bool:

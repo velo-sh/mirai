@@ -409,7 +409,7 @@ class TestRegression:
         # Verify AgentLoop doesn't reference MODEL_CATALOG anymore
         import inspect
 
-        from mirai.agent.loop import AgentLoop
+        from mirai.agent.agent_loop import AgentLoop
 
         source = inspect.getsource(AgentLoop._build_system_prompt)
         assert "MODEL_CATALOG" not in source
@@ -515,7 +515,7 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s4_swap_provider_updates_loop(self):
         """S4: swap_provider replaces self.provider on AgentLoop."""
-        from mirai.agent.loop import AgentLoop
+        from mirai.agent.agent_loop import AgentLoop
 
         old_provider = MagicMock()
         old_provider.provider_name = "minimax"

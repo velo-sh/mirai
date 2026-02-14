@@ -1,11 +1,11 @@
-"""Integration test for mirai.agent.loop — single-pass agent cycle with MockProvider."""
+"""Integration test for mirai.agent.agent_loop — single-pass agent cycle with MockProvider."""
 
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
-from mirai.agent.loop import AgentLoop, _load_soul
+from mirai.agent.agent_loop import AgentLoop, _load_soul
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 from mirai.db.session import init_db
