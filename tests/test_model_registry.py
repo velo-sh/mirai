@@ -71,6 +71,7 @@ def _make_registry(path: Path, **kwargs):
     registry._config_model = kwargs.get("config_model")
     registry._enrichment_source = None
     registry._free_source = None
+    registry._health_status = {}
     # Manually assign PATH before _load so _load reads from correct path
     ModelRegistry.PATH = path
     registry._data = registry._load()
@@ -88,6 +89,7 @@ def _make_registry_from_data(path: Path, data: dict, **kwargs):
     registry._config_model = kwargs.get("config_model")
     registry._enrichment_source = None
     registry._free_source = None
+    registry._health_status = {}
     registry.PATH = path
     from mirai.agent.registry_models import RegistryData
 

@@ -935,6 +935,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._free_source = None
+        reg._health_status = {}
 
         # Set up enrichment source
         cache_path = tmp_path / "cache.json"
@@ -986,6 +987,7 @@ class TestRegistryIntegration:
         reg.PATH = tmp_path / "reg.json"
         reg._enrichment_source = None
         reg._free_source = None
+        reg._health_status = {}
 
         mock_model = ModelInfo(
             id="minimax-m2.5",
@@ -1025,6 +1027,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._free_source = None
+        reg._health_status = {}
         mock_source = MagicMock()
         mock_source.fetch = AsyncMock(side_effect=RuntimeError("network down"))
         reg._enrichment_source = mock_source
@@ -1065,6 +1068,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._free_source = None
+        reg._health_status = {}
         mock_source = MagicMock()
 
         async def _hang_forever() -> dict:
@@ -1125,6 +1129,7 @@ class TestRegistryIntegration:
         reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
         reg.PATH = tmp_path / "reg.json"
         reg._free_source = None
+        reg._health_status = {}
 
         # Track events to prove concurrency
         events: list[str] = []
@@ -1189,6 +1194,7 @@ class TestRegistryIntegration:
         reg.PATH = tmp_path / "reg.json"
         reg._enrichment_source = None
         reg._free_source = None
+        reg._health_status = {}
 
         mock_model = ModelInfo(id="minimax-m2.5", name="MiniMax M2.5")
 

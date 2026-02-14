@@ -141,6 +141,12 @@ class FreeModelEntry:
     provider: str
     limits: dict[str, int | float] | None = None
 
+    # Capabilities (populated from API metadata when available)
+    context_length: int | None = None
+    vision: bool = False
+    reasoning: bool = False
+    supports_tool_use: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Runtime discovery source
@@ -236,6 +242,9 @@ class FreeProviderSource:
 
         Reference: ``fetch_openrouter_models()`` in free-llm-api-resources.
         Filters for models with ``pricing.prompt == "0"`` and ``:free`` suffix.
+
+        Extracts capability metadata from ``architecture``,
+        ``supported_parameters``, and ``context_length`` fields.
         """
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -256,12 +265,22 @@ class FreeProviderSource:
                 continue
 
             model_id = m["id"]
+
+            # Extract capabilities from API metadata
+            arch = m.get("architecture", {})
+            input_mods = arch.get("input_modalities", [])
+            supported_params = m.get("supported_parameters", [])
+
             entries.append(
                 FreeModelEntry(
                     id=model_id,
                     name=_get_model_name(model_id),
                     provider="openrouter",
                     limits={"requests/minute": 20, "requests/day": 50},
+                    context_length=m.get("context_length"),
+                    vision="image" in input_mods,
+                    reasoning="reasoning" in supported_params,
+                    supports_tool_use="tools" in supported_params,
                 )
             )
 
@@ -324,6 +343,10 @@ class FreeProviderSource:
                         name=m["name"],
                         provider=m["provider"],
                         limits=m.get("limits"),
+                        context_length=m.get("context_length"),
+                        vision=m.get("vision", False),
+                        reasoning=m.get("reasoning", False),
+                        supports_tool_use=m.get("supports_tool_use", False),
                     )
                     for m in praw.get("models", [])
                 ]
@@ -355,6 +378,10 @@ class FreeProviderSource:
                             "name": m.name,
                             "provider": m.provider,
                             "limits": m.limits,
+                            "context_length": m.context_length,
+                            "vision": m.vision,
+                            "reasoning": m.reasoning,
+                            "supports_tool_use": m.supports_tool_use,
                         }
                         for m in pdata.models
                     ],
@@ -368,6 +395,99 @@ class FreeProviderSource:
             log.debug("free_providers_cache_saved")
         except OSError as exc:
             log.warning("free_providers_cache_save_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Provider health checks
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProviderHealthStatus:
+    """Result of a lightweight provider health probe."""
+
+    name: str
+    healthy: bool
+    latency_ms: float | None = None
+    last_checked: float = 0.0
+    error: str | None = None
+
+
+async def check_provider_health(
+    specs: list[FreeProviderSpec] | None = None,
+) -> dict[str, ProviderHealthStatus]:
+    """Probe configured free providers with a lightweight GET /models call.
+
+    Only checks providers whose API key is set in the environment.
+    Returns a map of provider name → health status.
+    """
+    import os
+
+    if specs is None:
+        specs = FREE_PROVIDER_SPECS
+
+    results: dict[str, ProviderHealthStatus] = {}
+    tasks: list[tuple[FreeProviderSpec, Any]] = []
+
+    for spec in specs:
+        key = os.environ.get(spec.env_key)
+        if not key:
+            continue
+        tasks.append((spec, _probe_provider(spec, key)))
+
+    if not tasks:
+        return results
+
+    import asyncio
+
+    probes = await asyncio.gather(
+        *[t for _, t in tasks],
+        return_exceptions=True,
+    )
+
+    for (spec, _), result in zip(tasks, probes, strict=True):
+        if isinstance(result, BaseException):
+            results[spec.name] = ProviderHealthStatus(
+                name=spec.name,
+                healthy=False,
+                last_checked=time.time(),
+                error=str(result),
+            )
+        else:
+            results[spec.name] = result
+
+    return results
+
+
+async def _probe_provider(spec: FreeProviderSpec, api_key: str) -> ProviderHealthStatus:
+    """Send GET /models to a single provider and measure latency."""
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{spec.base_url}/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+        elapsed_ms = (time.monotonic() - start) * 1000
+        return ProviderHealthStatus(
+            name=spec.name,
+            healthy=True,
+            latency_ms=round(elapsed_ms, 1),
+            last_checked=time.time(),
+        )
+    except Exception as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        return ProviderHealthStatus(
+            name=spec.name,
+            healthy=False,
+            latency_ms=round(elapsed_ms, 1),
+            last_checked=time.time(),
+            error=str(exc),
+        )
 
 
 # ---------------------------------------------------------------------------

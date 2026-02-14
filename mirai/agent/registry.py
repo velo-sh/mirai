@@ -145,6 +145,7 @@ class ModelRegistry:
         self._data: RegistryData = self._load()
         self._enrichment_source: EnrichmentSource | None = None
         self._free_source: FreeProviderSource | None = None
+        self._health_status: dict[str, Any] = {}  # name -> ProviderHealthStatus
 
     def set_enrichment_source(self, source: EnrichmentSource) -> None:
         """Register an external metadata enrichment source.
@@ -163,6 +164,10 @@ class ModelRegistry:
         registry so unconfigured providers show available models.
         """
         self._free_source = source
+
+    def update_health(self, health: dict[str, Any]) -> None:
+        """Update cached health-check results for free providers."""
+        self._health_status = health
 
     # ------------------------------------------------------------------
     # Load / Save
@@ -353,11 +358,16 @@ class ModelRegistry:
             for fp_name, fp_data in free_data.items():
                 fp_pdata = new_providers.get(fp_name)
                 if fp_pdata is not None and not fp_pdata.available and fp_data.models:
-                    # Convert FreeModelEntry -> RegistryModelEntry
+                    # Convert FreeModelEntry -> RegistryModelEntry, including
+                    # any capability metadata extracted from provider APIs.
                     free_models = [
                         RegistryModelEntry(
                             id=fm.id,
                             name=fm.name,
+                            vision=fm.vision,
+                            reasoning=fm.reasoning,
+                            supports_tool_use=fm.supports_tool_use,
+                            context_window=fm.context_length,
                         )
                         for fm in fp_data.models
                     ]
@@ -372,9 +382,10 @@ class ModelRegistry:
             )
 
         # ------------------------------------------------------------------
-        # Phase 4: Apply static capability tags to free-provider models.
-        # The OpenAI /models endpoint doesn't report capabilities, so we
-        # use pattern-matching to tag well-known models.
+        # Phase 4: Apply static capability tags as FALLBACK.
+        # Providers that report capabilities via API (e.g. OpenRouter) have
+        # already set the flags above.  Static pattern-matching fills gaps
+        # for providers whose /models endpoint returns only id + created.
         # ------------------------------------------------------------------
         from mirai.agent.free_model_capabilities import enrich_capabilities
 
@@ -443,7 +454,15 @@ class ModelRegistry:
 
             for pname, pdata in available_providers.items():
                 is_active = pname == self.active_provider
-                lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}:")
+                # Show health indicator for free providers
+                health_tag = ""
+                hs = self._health_status.get(pname)
+                if hs is not None:
+                    if hs.healthy:
+                        health_tag = f" ✓ {hs.latency_ms:.0f}ms" if hs.latency_ms else " ✓"
+                    else:
+                        health_tag = " ✗ unhealthy"
+                lines.append(f"\n### {pname.upper()}{' (active)' if is_active else ''}{health_tag}:")
 
                 if not pdata.models:
                     lines.append("  (no models discovered)")
