@@ -95,6 +95,12 @@ class RegistryConfig(BaseModel):
     )
 
 
+class DreamerConfig(BaseModel):
+    """Memory consolidation (dreamer) configuration."""
+
+    interval: int = 3600  # seconds between dream cycles
+
+
 class TomlSource(PydanticBaseSettingsSource):
     """Custom settings source to load from TOML file using standard lib (py3.11+)."""
 
@@ -148,6 +154,7 @@ class MiraiConfig(BaseSettings):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     registry: RegistryConfig = Field(default_factory=RegistryConfig)
+    dreamer: DreamerConfig = Field(default_factory=DreamerConfig)
 
     @classmethod
     def settings_customise_sources(
