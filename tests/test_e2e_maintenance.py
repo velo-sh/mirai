@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 import pytest
 
@@ -30,6 +31,7 @@ async def test_e2e_proactive_maintenance_flow(monkeypatch):
         import duckdb
 
         self.conn = duckdb.connect(db_path)
+        self._lock = threading.Lock()
         self._init_schema()
 
     from mirai.db.duck import DuckDBStorage

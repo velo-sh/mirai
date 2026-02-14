@@ -2,9 +2,15 @@
 
 DuckDB has no native async driver, so all blocking I/O
 is offloaded to a thread via ``asyncio.to_thread()``.
+
+Thread-safety: DuckDB connections are **not** thread-safe.  Since
+``asyncio.to_thread()`` dispatches to a thread-pool, we create an
+independent *cursor* for each operation and serialize cursor creation
+with a ``threading.Lock``.
 """
 
 import asyncio
+import threading
 from typing import Any
 
 import duckdb
@@ -18,6 +24,7 @@ class DuckDBStorage:
     def __init__(self, db_path: str = "mirai_hdd.duckdb"):
         self.db_path = db_path
         self.conn: duckdb.DuckDBPyConnection | None = duckdb.connect(db_path)
+        self._lock = threading.Lock()
         self._init_schema()
 
     def close(self):
@@ -58,20 +65,34 @@ class DuckDBStorage:
             raise StorageError("DuckDB connection is closed. Reinitialize DuckDBStorage to reconnect.")
 
     def _execute(self, sql: str, params: list[Any] | None = None):
-        """Execute a statement synchronously (called via to_thread)."""
+        """Execute a statement synchronously (called via to_thread).
+
+        Creates an independent cursor so concurrent ``to_thread`` calls
+        do not share mutable state.
+        """
         self._check_conn()
         assert self.conn is not None
-        if params:
-            return self.conn.execute(sql, params)
-        return self.conn.execute(sql)
+        with self._lock:
+            cursor = self.conn.cursor()
+        try:
+            if params:
+                return cursor.execute(sql, params)
+            return cursor.execute(sql)
+        finally:
+            cursor.close()
 
     def _fetch_dicts(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         """Execute + fetchall as dicts (called via to_thread)."""
         self._check_conn()
         assert self.conn is not None
-        rel = self.conn.execute(sql, params)
-        columns = [desc[0] for desc in rel.description]
-        return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
+        with self._lock:
+            cursor = self.conn.cursor()
+        try:
+            rel = cursor.execute(sql, params)
+            columns = [desc[0] for desc in rel.description]
+            return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
+        finally:
+            cursor.close()
 
     async def append_trace(self, trace: DBTrace | None = None, **kwargs: Any) -> None:
         """Append a cognitive trace using the DBTrace model."""
@@ -146,17 +167,22 @@ class DuckDBStorage:
         def _query():
             self._check_conn()
             assert self.conn is not None
-            rel = self.conn.execute(
-                """
-                SELECT chat_id, role, content, timestamp FROM feishu_history
-                WHERE chat_id = ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                [chat_id, limit],
-            )
-            columns = [desc[0] for desc in rel.description]
-            rows = rel.fetchall()
+            with self._lock:
+                cursor = self.conn.cursor()
+            try:
+                rel = cursor.execute(
+                    """
+                    SELECT chat_id, role, content, timestamp FROM feishu_history
+                    WHERE chat_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    [chat_id, limit],
+                )
+                columns = [desc[0] for desc in rel.description]
+                rows = rel.fetchall()
+            finally:
+                cursor.close()
             # DuckDB returns latest first due to DESC, but context needs chronological.
             # We map to dict first to use model_validate
             dicts = [dict(zip(columns, row, strict=False)) for row in reversed(rows)]
@@ -170,14 +196,19 @@ class DuckDBStorage:
         def _query():
             self._check_conn()
             assert self.conn is not None
-            rel = self.conn.execute(
-                """
-                SELECT * FROM cognitive_traces
-                WHERE content LIKE ?
-                ORDER BY id DESC
-                """,
-                [f"%{query}%"],
-            )
-            return rel.fetchall()
+            with self._lock:
+                cursor = self.conn.cursor()
+            try:
+                rel = cursor.execute(
+                    """
+                    SELECT * FROM cognitive_traces
+                    WHERE content LIKE ?
+                    ORDER BY id DESC
+                    """,
+                    [f"%{query}%"],
+                )
+                return rel.fetchall()
+            finally:
+                cursor.close()
 
         return await asyncio.to_thread(_query)
