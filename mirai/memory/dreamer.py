@@ -43,11 +43,6 @@ class Dreamer:
         """
         log.info("dream_start", collaborator=self.collaborator_id)
 
-        # In a real system, we'd track 'last_processed_ulid'.
-        # For the MVP, we assume any trace with vector_id=NULL in L3 needs indexing.
-        # However, DuckDB implementation of append_trace currently doesn't update the DB after L2 write.
-        # Let's fetch traces that are of type 'message' and role 'user' for now as a simple dream.
-
         self.l3._check_conn()
         assert self.l3.conn is not None
         unindexed_traces = self.l3.conn.execute(
@@ -79,9 +74,6 @@ class Dreamer:
                 scope="global",
             )
             new_entries.append(entry)
-
-            # Update L3 with the vector_id (Optional MVP step)
-            # self.l3.conn.execute("UPDATE cognitive_traces SET vector_id = 'indexed' WHERE id = ?", [trace['id']])
 
         if new_entries:
             await self.l2.add_memories(new_entries)

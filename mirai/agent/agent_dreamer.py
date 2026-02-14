@@ -1,14 +1,12 @@
-import asyncio
-from typing import Any
-
 from mirai.agent.agent_loop import AgentLoop
 from mirai.db.duck import DuckDBStorage
 from mirai.logging import get_logger
+from mirai.utils.service import BaseBackgroundService
 
-log = get_logger("mirai.dreamer")
+log = get_logger("mirai.agent_dreamer")
 
 
-class Dreamer:
+class AgentDreamer(BaseBackgroundService):
     """Background service that periodically reflects on past thinking to evolve identity."""
 
     def __init__(
@@ -17,41 +15,13 @@ class Dreamer:
         storage: DuckDBStorage,
         interval_seconds: int = 3600,  # Default: 1 hour
     ) -> None:
+        super().__init__(interval_seconds)
         self.agent = agent
         self.storage = storage
-        self.interval_seconds = interval_seconds
-        self._running = False
-        self._task: asyncio.Task[Any] | None = None
 
-    def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Start the dreamer background task."""
-        if self._running:
-            return
-        self._running = True
-        self._task = loop.create_task(self._dream_loop())
-        log.info("dreamer_started", interval=self.interval_seconds)
-
-    async def stop(self):
-        """Stop the dreamer background task."""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        log.info("dreamer_stopped")
-
-    async def _dream_loop(self) -> None:
-        """Infinite loop for periodic dreaming."""
-        while self._running:
-            try:
-                await asyncio.sleep(self.interval_seconds)
-                await self.dream()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log.error("dreamer_loop_error", error=str(e), exc_info=True)
+    async def tick(self) -> None:
+        """Perform a single reflection and evolution cycle."""
+        await self.dream()
 
     async def dream(self) -> None:
         """Perform a single reflection and evolution cycle."""
@@ -59,7 +29,11 @@ class Dreamer:
 
         # 1. Fetch recent thinking traces
         traces = await self.storage.get_recent_traces(self.agent.collaborator_id, limit=20)
-        thinking_blocks = [t.content for t in traces if t.trace_type == "thinking"]
+        thinking_blocks = [
+            (t["content"] if isinstance(t, dict) else t.content)
+            for t in traces
+            if (t.get("trace_type") if isinstance(t, dict) else getattr(t, "trace_type", "")) == "thinking"
+        ]
 
         if not thinking_blocks:
             log.info("dream_skipped_no_thinking_traces")
