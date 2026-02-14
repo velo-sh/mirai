@@ -69,7 +69,7 @@ async def test_heartbeat(tmp_path):
     hb = HeartbeatManager(agent, interval_seconds=1)
 
     print("\n[test] Starting Heartbeat Manager...")
-    await hb.start()
+    hb.start()
 
     # Wait for a pulse
     print("[test] Waiting for first pulse...")

@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mirai.agent.agent_dreamer import AgentDreamer
 from mirai.agent.agent_loop import AgentLoop
-from mirai.agent.dreamer import Dreamer
 from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.providers import create_provider
 from mirai.agent.registry import ModelRegistry, registry_refresh_loop
@@ -74,7 +74,7 @@ class MiraiApp:
     def __init__(self) -> None:
         self.agent: AgentLoop | None = None
         self.heartbeat: HeartbeatManager | None = None
-        self.dreamer: Dreamer | None = None
+        self.dreamer: AgentDreamer | None = None
         self.registry: ModelRegistry | None = None
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
@@ -255,7 +255,7 @@ class MiraiApp:
                 interval_seconds=config.heartbeat.interval,
                 im_provider=im_provider,
             )
-            await self.heartbeat.start()
+            self.heartbeat.start()
 
         self._start_feishu_receiver(config)
         await self._send_checkin(im_provider, config)
@@ -400,5 +400,5 @@ class MiraiApp:
         if not self.agent:
             return
         dream_interval = int(os.getenv("MIRAI_DREAM_INTERVAL", "3600"))
-        self.dreamer = Dreamer(self.agent, self.agent.l3_storage, interval_seconds=dream_interval)
+        self.dreamer = AgentDreamer(self.agent, self.agent.l3_storage, interval_seconds=dream_interval)
         self.dreamer.start(loop=asyncio.get_running_loop())

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mirai.agent.dreamer import Dreamer
+from mirai.agent.agent_dreamer import AgentDreamer
 from mirai.agent.im.feishu_receiver import FeishuEventReceiver
 from mirai.agent.tools.editor import EditorTool
 from mirai.agent.tools.git import GitTool
@@ -69,7 +69,7 @@ async def test_dreamer_short_response_safeguard():
     mock_resp.text.return_value = "Too short soul content."
     mock_agent.provider.generate_response.return_value = mock_resp
 
-    dreamer = Dreamer(mock_agent, mock_storage)
+    dreamer = AgentDreamer(mock_agent, mock_storage)
     await dreamer.dream()
 
     # update_soul should NOT have been called
