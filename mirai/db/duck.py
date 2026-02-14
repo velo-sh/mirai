@@ -10,6 +10,7 @@ from typing import Any
 import duckdb
 import orjson
 
+from mirai.db.models import DBTrace, FeishuMessage
 from mirai.errors import StorageError
 
 
@@ -72,17 +73,9 @@ class DuckDBStorage:
         columns = [desc[0] for desc in rel.description]
         return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
 
-    async def append_trace(
-        self,
-        id: str,
-        collaborator_id: str,
-        trace_type: str,
-        content: str,
-        metadata: dict[str, Any] = None,
-        importance: float = 0.0,
-        vector_id: str = None,
-    ):
-        metadata_json = orjson.dumps(metadata or {}).decode()
+    async def append_trace(self, trace: DBTrace):
+        """Append a cognitive trace using the DBTrace model."""
+        metadata_json = orjson.dumps(trace.metadata).decode()
         await asyncio.to_thread(
             self._execute,
             """
@@ -90,15 +83,23 @@ class DuckDBStorage:
             (id, collaborator_id, trace_type, content, metadata_json, importance, vector_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            [id, collaborator_id, trace_type, content, metadata_json, importance, vector_id],
+            [
+                trace.id,
+                trace.collaborator_id,
+                trace.trace_type,
+                trace.content,
+                metadata_json,
+                trace.importance,
+                trace.vector_id,
+            ],
         )
 
-    async def get_traces_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+    async def get_traces_by_ids(self, ids: list[str]) -> list[DBTrace]:
         if not ids:
             return []
 
         placeholders = ", ".join(["?"] * len(ids))
-        return await asyncio.to_thread(
+        dicts = await asyncio.to_thread(
             self._fetch_dicts,
             f"""
             SELECT * FROM cognitive_traces
@@ -107,9 +108,10 @@ class DuckDBStorage:
             """,
             ids,
         )
+        return [DBTrace.model_validate(d) for d in dicts]
 
-    async def get_recent_traces(self, collaborator_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(
+    async def get_recent_traces(self, collaborator_id: str, limit: int = 10) -> list[DBTrace]:
+        dicts = await asyncio.to_thread(
             self._fetch_dicts,
             """
             SELECT * FROM cognitive_traces
@@ -119,36 +121,40 @@ class DuckDBStorage:
             """,
             [collaborator_id, limit],
         )
+        return [DBTrace.model_validate(d) for d in dicts]
 
-    async def save_feishu_history(self, chat_id: str, role: str, content: str):
-        """Save a message turn to the Feishu history table."""
+    async def save_feishu_history(self, msg: FeishuMessage):
+        """Save a message turn using the FeishuMessage model."""
         await asyncio.to_thread(
             self._execute,
             """
             INSERT INTO feishu_history (chat_id, role, content)
             VALUES (?, ?, ?)
             """,
-            [chat_id, role, content],
+            [msg.chat_id, msg.role, msg.content],
         )
 
-    async def get_feishu_history(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
-        """Retrieve recent conversation history for a specific chat."""
+    async def get_feishu_history(self, chat_id: str, limit: int = 20) -> list[FeishuMessage]:
+        """Retrieve recent conversation history as FeishuMessage models."""
 
         def _query():
             self._check_conn()
             assert self.conn is not None
             rel = self.conn.execute(
                 """
-                SELECT role, content FROM feishu_history
+                SELECT chat_id, role, content, timestamp FROM feishu_history
                 WHERE chat_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
                 [chat_id, limit],
             )
-            # DuckDB returns latest first due to DESC, but LLM context needs chronological.
+            columns = [desc[0] for desc in rel.description]
             rows = rel.fetchall()
-            return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+            # DuckDB returns latest first due to DESC, but context needs chronological.
+            # We map to dict first to use model_validate
+            dicts = [dict(zip(columns, row, strict=False)) for row in reversed(rows)]
+            return [FeishuMessage.model_validate(d) for d in dicts]
 
         return await asyncio.to_thread(_query)
 

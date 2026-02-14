@@ -222,7 +222,9 @@ class FeishuEventReceiver:
             if history is None:
                 # Cache miss - try to load from persistent storage
                 if self._storage:
-                    history = await self._storage.get_feishu_history(chat_id, limit=self.MAX_HISTORY_TURNS * 2)
+                    messages = await self._storage.get_feishu_history(chat_id, limit=self.MAX_HISTORY_TURNS * 2)
+                    # Convert models back to lists for the internal handler/loop compat
+                    history = [{"role": m.role, "content": m.content} for m in messages]
                     self._conversations[chat_id] = history
                     log.info("history_loaded_from_storage", chat_id=chat_id, turns=len(history) // 2)
                 else:
@@ -352,8 +354,14 @@ class FeishuEventReceiver:
 
         # Also persist to L3 storage
         if self._storage:
+            from mirai.db.models import FeishuMessage
+
             try:
-                await self._storage.save_feishu_history(chat_id, "user", user_msg_str)
-                await self._storage.save_feishu_history(chat_id, "assistant", assistant_msg)
+                await self._storage.save_feishu_history(
+                    FeishuMessage(chat_id=chat_id, role="user", content=user_msg_str)
+                )
+                await self._storage.save_feishu_history(
+                    FeishuMessage(chat_id=chat_id, role="assistant", content=assistant_msg)
+                )
             except Exception as e:
                 log.error("history_save_failed", chat_id=chat_id, error=str(e))

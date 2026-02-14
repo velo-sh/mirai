@@ -200,7 +200,7 @@ async def test_heartbeat_pulse(provider: Any, model: str) -> bool:
 
     start = time.time()
     try:
-        from mirai.agent.loop import AgentLoop
+        from mirai.agent.agent_loop import AgentLoop
         from mirai.agent.tools.echo import EchoTool
         from mirai.agent.tools.workspace import WorkspaceTool
         from mirai.db.session import init_db

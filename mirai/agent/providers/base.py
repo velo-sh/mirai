@@ -55,8 +55,8 @@ class ModelInfo:
     output_price: float | None = None
 
     # --- Lifecycle ---
-    knowledge_cutoff: str | None = None   # e.g. "2025-03"
-    deprecation_date: str | None = None   # ISO-8601 date
+    knowledge_cutoff: str | None = None  # e.g. "2025-03"
+    deprecation_date: str | None = None  # ISO-8601 date
 
 
 @dataclass
@@ -96,7 +96,10 @@ class ProviderProtocol(Protocol):
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> ProviderResponse: ...
+
+    def config_dict(self) -> dict[str, Any]: ...
 
     async def list_models(self) -> list[ModelInfo]: ...
 

@@ -63,6 +63,12 @@ class OpenAIProvider:
             base_url=base_url or self.DEFAULT_BASE_URL,
         )
 
+    def config_dict(self) -> dict[str, Any]:
+        """Return provider configuration as a dictionary."""
+        return {
+            "max_tokens": self._max_tokens,
+        }
+
     # ------------------------------------------------------------------
     # Provider identity
     # ------------------------------------------------------------------
@@ -114,6 +120,7 @@ class OpenAIProvider:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        **kwargs: Any,
     ) -> ProviderResponse:
         """Send a chat completion request and return a ProviderResponse.
 
@@ -137,12 +144,20 @@ class OpenAIProvider:
             oai_tools = self._convert_tools(tools) if tools else openai.NOT_GIVEN
 
             log.info("api_request_sending", requested_model=model, effective_model=model)
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=oai_messages,  # type: ignore[arg-type]
-                tools=oai_tools,  # type: ignore[arg-type]
-                max_tokens=self._max_tokens,
-            )
+            # Use kwargs for dynamic parameter injection (temperature, top_p, etc.)
+            request_params = {
+                "model": model,
+                "messages": oai_messages,
+                "tools": oai_tools,
+                "max_tokens": kwargs.pop("max_tokens", self._max_tokens),
+                **kwargs,
+            }
+            response = await self.client.chat.completions.create(**request_params)  # type: ignore[arg-type]
+
+            if hasattr(response, "usage") and response.usage:
+                span.set_attribute("llm.usage.prompt_tokens", response.usage.prompt_tokens)
+                span.set_attribute("llm.usage.completion_tokens", response.usage.completion_tokens)
+                span.set_attribute("llm.usage.total_tokens", response.usage.total_tokens)
 
             span.set_attribute("http.status_code", 200)
             return self._to_provider_response(response, model_id=model)

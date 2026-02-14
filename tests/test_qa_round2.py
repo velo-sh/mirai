@@ -365,7 +365,7 @@ class TestFallbackChainEdgeCases:
     """Additional fallback chain edge cases beyond test_fallback_chain.py."""
 
     def _make_loop(self, provider, fallback_models=None):
-        from mirai.agent.loop import AgentLoop
+        from mirai.agent.agent_loop import AgentLoop
 
         loop = AgentLoop.__new__(AgentLoop)
         loop.provider = provider

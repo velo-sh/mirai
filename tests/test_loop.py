@@ -3,11 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.memory import MemorizeTool
-from mirai.db.session import init_db
+from mirai.collaborator.models import CollaboratorCreate
+from mirai.db.session import get_session, init_db
 
 
 @pytest.mark.asyncio
@@ -15,10 +16,24 @@ async def test_agent_loop(tmp_path):
     print("--- Starting Agent Loop Mock Test ---")
     await init_db(f"sqlite+aiosqlite:///{tmp_path / 'mirai.db'}")
 
+    # Seed collaborator
+    from mirai.collaborator.manager import CollaboratorManager
+
+    collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
+    async for session in get_session():
+        manager = CollaboratorManager(session)
+        await manager.create_collaborator(
+            CollaboratorCreate(
+                id=collaborator_id,
+                name="Test Bot",
+                role="AI assistant",
+                system_prompt="You are a helpful AI collaborator.",
+            )
+        )
+
     # Initialize components
     provider = MockProvider()
-    collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
-    tools = [EchoTool(), MemorizeTool(collaborator_id=collaborator_id)]
+    tools = [EchoTool(), MemorizeTool()]
 
     # Use mocks for storage
     agent = await AgentLoop.create(

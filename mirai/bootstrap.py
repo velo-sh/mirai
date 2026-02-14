@@ -7,14 +7,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.dreamer import Dreamer
 from mirai.agent.heartbeat import HeartbeatManager
-from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import create_provider
 from mirai.agent.registry import ModelRegistry, registry_refresh_loop
-from mirai.agent.tools.echo import EchoTool
 from mirai.agent.tools.system import SystemTool
-from mirai.agent.tools.workspace import WorkspaceTool
 from mirai.config import MiraiConfig
 from mirai.db.session import init_db
 from mirai.logging import get_logger, setup_logging
@@ -200,17 +198,29 @@ class MiraiApp:
                 base_url=config.llm.base_url,
             )
 
+            from mirai.agent.tools.base import ToolContext
+            from mirai.agent.tools.echo import EchoTool
             from mirai.agent.tools.editor import EditorTool
             from mirai.agent.tools.git import GitTool
             from mirai.agent.tools.shell import ShellTool
+            from mirai.agent.tools.workspace import WorkspaceTool
 
-            system_tool = SystemTool(
+            context = ToolContext(
                 config=config,
-                start_time=self.start_time,
-                provider=provider,
                 registry=self.registry,
+                provider=provider,
+                start_time=self.start_time,
             )
-            tools = [EchoTool(), WorkspaceTool(), ShellTool(), EditorTool(), GitTool(), system_tool]
+
+            system_tool = SystemTool(context=context)
+            tools = [
+                EchoTool(context=context),
+                WorkspaceTool(context=context),
+                ShellTool(context=context),
+                EditorTool(context=context),
+                GitTool(context=context),
+                system_tool,
+            ]
             self.agent = await AgentLoop.create(
                 provider=provider,
                 tools=tools,

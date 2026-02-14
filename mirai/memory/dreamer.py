@@ -3,6 +3,7 @@ from typing import Any
 
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.db.duck import DuckDBStorage
+from mirai.db.models import DBTrace
 from mirai.logging import get_logger
 from mirai.memory.vector_db import MemoryEntry, VectorStore
 
@@ -57,9 +58,10 @@ class Dreamer:
             [self.collaborator_id],
         ).fetchall()
 
-        # (Converting DuckDB results to dicts)
+        # (Converting DuckDB results to dicts and then to models)
         columns = [desc[0] for desc in self.l3.conn.description]  # type: ignore[union-attr]
-        traces = [dict(zip(columns, row, strict=False)) for row in unindexed_traces]
+        dicts = [dict(zip(columns, row, strict=False)) for row in unindexed_traces]
+        traces = [DBTrace.model_validate(d) for d in dicts]
 
         if not traces:
             log.info("dream_nothing_to_consolidate")
@@ -67,11 +69,11 @@ class Dreamer:
 
         new_entries = []
         for trace in traces:
-            log.debug("dream_processing_trace", trace_id=trace["id"])
-            vector = await self.embedder.get_embeddings(trace["content"])
+            log.debug("dream_processing_trace", trace_id=trace.id)
+            vector = await self.embedder.get_embeddings(trace.content)
             entry = MemoryEntry(
-                content=trace["content"],
-                metadata={"trace_id": trace["id"], "source": "dreaming"},
+                content=trace.content,
+                metadata={"trace_id": trace.id, "source": "dreaming"},
                 vector=vector,
                 collaborator_id=self.collaborator_id,
                 scope="global",

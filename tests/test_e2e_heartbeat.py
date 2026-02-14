@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.heartbeat import HeartbeatManager
-from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.workspace import WorkspaceTool
 from mirai.db.session import init_db

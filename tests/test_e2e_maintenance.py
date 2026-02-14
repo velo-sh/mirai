@@ -3,9 +3,9 @@ import os
 
 import pytest
 
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.im.feishu import FeishuProvider
-from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.db.session import init_db
 

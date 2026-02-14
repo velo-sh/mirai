@@ -24,9 +24,9 @@ import duckdb
 import orjson
 import pytest
 
+from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.im.base import BaseIMProvider
 from mirai.agent.im.feishu_receiver import FeishuEventReceiver
-from mirai.agent.loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.echo import EchoTool
 
@@ -42,7 +42,7 @@ def _init_memory(self, db_path=":memory:"):
 
 def _create_agent() -> AgentLoop:
     """Real AgentLoop with MockProvider (no network, in-memory DB)."""
-    with patch("mirai.agent.loop.DuckDBStorage.__init__", _init_memory):
+    with patch("mirai.agent.agent_loop.DuckDBStorage.__init__", _init_memory):
         agent = AgentLoop(
             provider=MockProvider(),
             tools=[EchoTool()],
@@ -122,9 +122,7 @@ class TestFeishuAgentE2E:
                 # Extract text from card elements (lark_md div)
                 elements = content.get("elements", [])
                 text = " ".join(
-                    el.get("text", {}).get("content", "")
-                    for el in elements
-                    if el.get("tag") == "div"
+                    el.get("text", {}).get("content", "") for el in elements if el.get("tag") == "div"
                 ) or str(content)
             else:
                 text = content.get("text", "")
@@ -149,7 +147,6 @@ class TestFeishuAgentE2E:
             return FakeFeishuReplyResponse()
 
         mock_reply_client.im.v1.message.areply = mock_areply
-        from unittest.mock import AsyncMock
         mock_reply_client.im.v1.message_reaction.acreate = mock_acreate
 
         # Build receiver with real AgentLoop as handler
@@ -221,10 +218,10 @@ class TestFeishuAgentE2E:
         mock_v1 = MagicMock()
         mock_msg = MagicMock()
         mock_reaction = MagicMock()
-        
+
         mock_msg.areply = mock_areply
         mock_reaction.acreate = mock_acreate
-        
+
         mock_v1.message = mock_msg
         mock_v1.message_reaction = mock_reaction
         mock_im.v1 = mock_v1
@@ -282,7 +279,7 @@ class TestFeishuAgentE2E:
         mock_v1.message_reaction = mock_reaction
         mock_im.v1 = mock_v1
         mock_client.im = mock_im
-    
+
         async def exploding_handler(sender_id, text, chat_id, history):
             raise RuntimeError("LLM service unavailable")
 

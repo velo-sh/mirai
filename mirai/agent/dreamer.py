@@ -1,6 +1,7 @@
 import asyncio
+from typing import Any
 
-from mirai.agent.loop import AgentLoop
+from mirai.agent.agent_loop import AgentLoop
 from mirai.db.duck import DuckDBStorage
 from mirai.logging import get_logger
 
@@ -15,14 +16,14 @@ class Dreamer:
         agent: AgentLoop,
         storage: DuckDBStorage,
         interval_seconds: int = 3600,  # Default: 1 hour
-    ):
+    ) -> None:
         self.agent = agent
         self.storage = storage
         self.interval_seconds = interval_seconds
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
-    def start(self, loop: asyncio.AbstractEventLoop):
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start the dreamer background task."""
         if self._running:
             return
@@ -41,7 +42,7 @@ class Dreamer:
                 pass
         log.info("dreamer_stopped")
 
-    async def _dream_loop(self):
+    async def _dream_loop(self) -> None:
         """Infinite loop for periodic dreaming."""
         while self._running:
             try:
@@ -52,13 +53,13 @@ class Dreamer:
             except Exception as e:
                 log.error("dreamer_loop_error", error=str(e), exc_info=True)
 
-    async def dream(self):
+    async def dream(self) -> None:
         """Perform a single reflection and evolution cycle."""
         log.info("dream_cycle_starting", collaborator=self.agent.collaborator_id)
 
         # 1. Fetch recent thinking traces
         traces = await self.storage.get_recent_traces(self.agent.collaborator_id, limit=20)
-        thinking_blocks = [t["content"] for t in traces if t["trace_type"] == "thinking"]
+        thinking_blocks = [t.content for t in traces if t.trace_type == "thinking"]
 
         if not thinking_blocks:
             log.info("dream_skipped_no_thinking_traces")

@@ -9,6 +9,7 @@ Prompt construction lives in :mod:`mirai.agent.prompt`.
 """
 
 import asyncio
+import enum
 import json
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
@@ -72,6 +73,16 @@ class RefinedStep:
 CycleEvent = ThinkingStep | ToolCallStep | DraftStep | RefinedStep
 
 
+class LoopState(enum.Enum):
+    """Execution states for the AgentLoop."""
+
+    IDLE = "idle"
+    THINKING = "thinking"
+    ACTING = "acting"
+    RECOVERING = "recovering"
+    DONE = "done"
+
+
 # _load_soul is now in mirai.agent.identity (re-exported for backward compat)
 _load_soul = load_soul
 
@@ -82,6 +93,7 @@ class AgentLoop:
         provider: ProviderProtocol,
         tools: Sequence[BaseTool],
         collaborator_id: str,
+        base_system_prompt: str = "",
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
         embedder: Any | None = None,
@@ -90,12 +102,20 @@ class AgentLoop:
         self.provider = provider
         self.tools = {tool.definition["name"]: tool for tool in tools}
         self.collaborator_id = collaborator_id
+        self.base_system_prompt = base_system_prompt
         self.fallback_models: list[str] = fallback_models or []
+
+        # State Machine tracking
+        self.state = LoopState.IDLE
+        self.runtime_overrides: dict[str, Any] = {}
 
         # Dependency Injection with fallbacks
         self.l3_storage = l3_storage or DuckDBStorage()
         self.l2_storage = l2_storage or VectorStore()
         self.embedder = embedder or MockEmbeddingProvider()
+        self.name: str = ""
+        self.role: str = ""
+        self.soul_content: str = ""
 
     def swap_provider(self, new_provider: ProviderProtocol) -> None:
         """Hot-swap the LLM provider at runtime.
@@ -123,7 +143,7 @@ class AgentLoop:
         l2_storage: VectorStore | None = None,
         embedder: Any | None = None,
         fallback_models: list[str] | None = None,
-    ):
+    ) -> AgentLoop:
         """Factory method to create and initialize an AgentLoop instance."""
         instance = cls(
             provider,
@@ -137,20 +157,26 @@ class AgentLoop:
         await instance._initialize()
         return instance
 
-    async def _initialize(self):
+    async def _initialize(self) -> None:
         """Asynchronously load collaborator metadata and soul."""
         name, role, prompt = await initialize_collaborator(self.collaborator_id)
         self.name = name
         self.role = role
         self.base_system_prompt = prompt
 
-    async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] = None):
+    async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] | None = None) -> str:
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
-        trace_id = str(ULID())
-        await self.l3_storage.append_trace(
-            id=trace_id, collaborator_id=self.collaborator_id, trace_type=trace_type, content=content, metadata=metadata
+        from mirai.db.models import DBTrace
+
+        trace = DBTrace(
+            id=str(ULID()),
+            collaborator_id=self.collaborator_id,
+            trace_type=trace_type,
+            content=content,
+            metadata_json=metadata or {},
         )
-        return trace_id
+        await self.l3_storage.append_trace(trace)
+        return trace.id
 
     async def update_soul(self, new_content: str) -> bool:
         """Update the SOUL.md file with new content."""
@@ -181,7 +207,8 @@ class AgentLoop:
         """Execute a single tool and return the result string."""
         if tool_call.name in self.tools:
             try:
-                return await self.tools[tool_call.name].execute(**tool_call.input)
+                # Always use .run() to ensure automated tracing spans are captured
+                return await self.tools[tool_call.name].run(**tool_call.input)
             except Exception as exc:
                 log.error("tool_exec_error", tool=tool_call.name, error=str(exc))
                 return (
@@ -191,25 +218,23 @@ class AgentLoop:
                 )
         return f"Error: Tool {tool_call.name} not found."
 
+    def _transition(self, next_state: LoopState) -> None:
+        """Perform a state transition with logging."""
+        prev = self.state
+        self.state = next_state
+        log.info("loop_state_transition", prev=prev.value, next=next_state.value)
+
     async def _execute_cycle(
         self,
         message: str | list[dict[str, Any]],
         model: str | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[CycleEvent, None]:
-        """Single-pass agent loop — system + tools + message → response.
-
-        No multi-phase orchestration. The model receives the system prompt,
-        tool definitions, and user message, then responds naturally — using
-        tools when it decides to, producing a final text response when done.
-
-        Yields:
-            ToolCallStep  — for each tool invocation
-            RefinedStep   — final text response
-        """
+        """State-machine-driven agent loop."""
         tracer = get_tracer()
 
         with tracer.start_as_current_span("agent.run") as span:
+            self._transition(LoopState.THINKING)
             # Normalize message text for embeddings & tracing
             msg_text = ""
             if isinstance(message, str):
@@ -236,7 +261,7 @@ class AgentLoop:
             messages.append({"role": "user", "content": message})
             tool_definitions = [tool.definition for tool in self.tools.values()]
 
-            # ---- Single-pass tool loop ----
+            # ---- State-driven tool loop ----
             MAX_TOOL_ROUNDS = 10
             tool_round = 0
             final_text = ""
@@ -260,15 +285,22 @@ class AgentLoop:
                     last_error: Exception | None = None
                     for attempt_idx, attempt_model in enumerate(models_to_try):
                         if attempt_idx > 0:
+                            self._transition(LoopState.RECOVERING)
                             backoff = min(0.5 * attempt_idx, 5.0)
                             log.info("fallback_backoff", seconds=backoff, attempt=attempt_idx)
                             await asyncio.sleep(backoff)
+                            self._transition(LoopState.THINKING)
                         try:
+                            # Prepare config with overrides
+                            loop_config: dict[str, Any] = {**self.provider.config_dict(), **self.runtime_overrides}
+                            from typing import cast
+
                             response = await self.provider.generate_response(
-                                model=str(attempt_model),
+                                model=cast(str, attempt_model),
                                 system=full_system_prompt,
                                 messages=messages,
                                 tools=tool_definitions,
+                                **loop_config,
                             )
                             if attempt_model != model:
                                 log.info("fallback_model_succeeded", model=attempt_model)
@@ -283,8 +315,9 @@ class AgentLoop:
                                 remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
                             )
                     if response is None:
+                        self._transition(LoopState.DONE)
                         if last_error is not None:
-                            raise ProviderError("All models in fallback chain failed") from last_error
+                            raise ProviderError(f"All models in fallback chain failed: {last_error}") from last_error
                         raise ProviderError("All models in fallback chain failed")
                     log.info(
                         "llm_response",
@@ -325,6 +358,7 @@ class AgentLoop:
 
                 # Execute tools if present
                 if response.stop_reason == "tool_use" or tool_calls:
+                    self._transition(LoopState.ACTING)
                     for tool_call in tool_calls:
                         log.info("tool_call", tool=tool_call.name, input=tool_call.input)
                         await self._archive_trace(
@@ -342,9 +376,12 @@ class AgentLoop:
                                 "content": result,
                             }
                         )
+                    # Loop back to THINKING for the next model turn
+                    self._transition(LoopState.THINKING)
                 else:
                     # Model produced a final text response — done
                     final_text = "".join(text_parts)
+                    self._transition(LoopState.DONE)
                     break
 
             # Fallback if loop ended without text
@@ -396,12 +433,15 @@ class AgentLoop:
     ) -> str:
         """Internal execution — consumes _execute_cycle and returns the final text."""
         result = ""
-        async for step in self._execute_cycle(message, model, history):
-            if isinstance(step, RefinedStep):
-                result = step.text
+        try:
+            async for step in self._execute_cycle(message, model, history):
+                if isinstance(step, RefinedStep):
+                    result = step.text
+        finally:
+            self._transition(LoopState.IDLE)
         return result
 
-    async def stream_run(self, message: str, model: str | None = None):
+    async def stream_run(self, message: str, model: str | None = None) -> AsyncGenerator[dict[str, Any], None]:
         """Async generator that yields SSE event dicts during the agent cycle.
 
         Events:
