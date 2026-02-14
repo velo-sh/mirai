@@ -116,6 +116,21 @@ async def health_check():
             except Exception:
                 pass
 
+        # DuckDB connectivity check
+        duckdb_ok = False
+        if agent and hasattr(agent, "l3_storage") and agent.l3_storage:
+            duckdb_ok = agent.l3_storage.conn is not None
+
+        # Background service status
+        services: dict[str, str] = {}
+        if _mirai:
+            dreamer = getattr(_mirai, "dreamer", None)
+            heartbeat = getattr(_mirai, "heartbeat", None)
+            if dreamer is not None and hasattr(dreamer, "is_running"):
+                services["dreamer"] = "running" if bool(dreamer.is_running) else "stopped"
+            if heartbeat is not None and hasattr(heartbeat, "is_running"):
+                services["heartbeat"] = "running" if bool(heartbeat.is_running) else "stopped"
+
         return {
             "status": "ok" if agent else "degraded",
             "pid": os.getpid(),
@@ -124,6 +139,8 @@ async def health_check():
             "agent_ready": agent is not None,
             "provider": provider_name,
             "model": model_name,
+            "duckdb_connected": duckdb_ok,
+            "services": services,
             "quota_status": quota_status,
         }
     except Exception:

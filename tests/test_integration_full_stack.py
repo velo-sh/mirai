@@ -69,6 +69,9 @@ def real_app():
     mock_app.config = MagicMock()
     mock_app.start = AsyncMock()
     mock_app.shutdown = AsyncMock()
+    mock_app.start_time = time.monotonic()
+    mock_app.dreamer = None
+    mock_app.heartbeat = None
 
     main_module._mirai = mock_app
 

@@ -11,6 +11,7 @@ with a ``threading.Lock``.
 
 import asyncio
 import threading
+import time
 from typing import Any
 
 import duckdb
@@ -18,6 +19,12 @@ import orjson
 
 from mirai.db.models import DBTrace, FeishuMessage
 from mirai.errors import StorageError
+from mirai.logging import get_logger
+
+_log = get_logger("mirai.db.duck")
+
+# Queries slower than this threshold (seconds) are logged at warning level.
+_SLOW_QUERY_THRESHOLD = 0.1
 
 
 class DuckDBStorage:
@@ -74,12 +81,16 @@ class DuckDBStorage:
         assert self.conn is not None
         with self._lock:
             cursor = self.conn.cursor()
+        t0 = time.perf_counter()
         try:
             if params:
                 return cursor.execute(sql, params)
             return cursor.execute(sql)
         finally:
+            elapsed = time.perf_counter() - t0
             cursor.close()
+            if elapsed >= _SLOW_QUERY_THRESHOLD:
+                _log.warning("slow_query", sql=sql[:120], duration_ms=round(elapsed * 1000, 1))
 
     def _fetch_dicts(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         """Execute + fetchall as dicts (called via to_thread)."""
@@ -87,12 +98,16 @@ class DuckDBStorage:
         assert self.conn is not None
         with self._lock:
             cursor = self.conn.cursor()
+        t0 = time.perf_counter()
         try:
             rel = cursor.execute(sql, params)
             columns = [desc[0] for desc in rel.description]
             return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
         finally:
+            elapsed = time.perf_counter() - t0
             cursor.close()
+            if elapsed >= _SLOW_QUERY_THRESHOLD:
+                _log.warning("slow_query", sql=sql[:120], duration_ms=round(elapsed * 1000, 1))
 
     async def append_trace(self, trace: DBTrace | None = None, **kwargs: Any) -> None:
         """Append a cognitive trace using the DBTrace model."""

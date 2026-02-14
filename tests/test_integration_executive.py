@@ -1,6 +1,5 @@
 import asyncio
 import os
-import threading
 
 import pytest
 
@@ -8,46 +7,32 @@ from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.providers import MockProvider
 from mirai.agent.tools.editor import EditorTool
 from mirai.agent.tools.shell import ShellTool
+from mirai.db.duck import DuckDBStorage
 from mirai.db.session import init_db
 
 
 @pytest.mark.asyncio
-async def test_executive_multi_step_workflow(monkeypatch):
+async def test_executive_multi_step_workflow(monkeypatch, tmp_path):
     """
     QA Integration Test: Verify the 'Search -> Thinking -> Write' multi-step workflow.
     """
     # Use temporary DBs to avoid locks
-    test_sqlite = "tests/data/test_l1.db"
-    test_duck = "tests/data/test_l3.duckdb"
-
-    if os.path.exists(test_sqlite):
-        os.remove(test_sqlite)
-    if os.path.exists(test_duck):
-        os.remove(test_duck)
+    test_sqlite = str(tmp_path / "test_l1.db")
+    test_duck = str(tmp_path / "test_l3.duckdb")
 
     # Mock the DB paths
     monkeypatch.setenv("SQLITE_DB_URL", f"sqlite+aiosqlite:///{test_sqlite}")
 
-    from mirai.db.duck import DuckDBStorage
-
-    # We need to ensure DuckDBStorage uses our test path
-    def mock_duck_init(self, db_path=test_duck):
-        self.db_path = db_path
-        import duckdb
-
-        self.conn = duckdb.connect(db_path)
-        self._lock = threading.Lock()
-        self._init_schema()
-
-    monkeypatch.setattr(DuckDBStorage, "__init__", mock_duck_init)
-
     await init_db()
+
+    # Create DuckDB storage with explicit path — no monkey-patching
+    storage = DuckDBStorage(db_path=test_duck)
 
     # Setup Agent with Executive Tools
     provider = MockProvider()
     collaborator_id = "01AN4Z048W7N7DF3SQ5G16CYAJ"
     tools = [ShellTool(), EditorTool()]
-    agent = await AgentLoop.create(provider, tools, collaborator_id)
+    agent = await AgentLoop.create(provider, tools, collaborator_id, l3_storage=storage)
 
     # 2. Add specific mock behavior for this workflow
     # We want to see: shell_tool (ls) -> editor_tool (write)
@@ -72,6 +57,7 @@ async def test_executive_multi_step_workflow(monkeypatch):
     # Clean up
     if os.path.exists("soul_summary.txt"):
         os.remove("soul_summary.txt")
+    storage.close()
 
     print("\n[QA] Executive Multi-Step Integration Test Passed: Search-and-Write flow verified.")
 

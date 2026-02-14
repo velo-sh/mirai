@@ -39,3 +39,41 @@ def duckdb_storage():
     storage = DuckDBStorage(db_path=":memory:")
     yield storage
     storage.close()
+
+
+@pytest.fixture
+def duck_path_storage(tmp_path):
+    """Create a DuckDBStorage at a temporary on-disk path.
+
+    Returns (storage, db_path) so tests can verify persistence.
+    """
+    from mirai.db.duck import DuckDBStorage
+
+    db_path = str(tmp_path / "test_l3.duckdb")
+    storage = DuckDBStorage(db_path=db_path)
+    yield storage, db_path
+    storage.close()
+
+
+@pytest.fixture
+def mock_agent(duckdb_storage):
+    """Create an AgentLoop with MockProvider and in-memory DuckDB.
+
+    Injects storage via the ``l3_storage`` parameter so no monkey-patching
+    of ``DuckDBStorage.__init__`` is needed.
+    """
+    from mirai.agent.agent_loop import AgentLoop
+    from mirai.agent.providers import MockProvider
+    from mirai.agent.tools.echo import EchoTool
+
+    agent = AgentLoop(
+        provider=MockProvider(),
+        tools=[EchoTool()],
+        collaborator_id="test-agent",
+        l3_storage=duckdb_storage,
+    )
+    agent.name = "Mira"
+    agent.role = "collaborator"
+    agent.base_system_prompt = "You are Mira, a helpful collaborator."
+    agent.soul_content = ""
+    return agent

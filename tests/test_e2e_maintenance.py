@@ -1,6 +1,5 @@
 import asyncio
 import os
-import threading
 
 import pytest
 
@@ -8,37 +7,25 @@ from mirai.agent.agent_loop import AgentLoop
 from mirai.agent.heartbeat import HeartbeatManager
 from mirai.agent.im.feishu import FeishuProvider
 from mirai.agent.providers import MockProvider
+from mirai.db.duck import DuckDBStorage
 from mirai.db.session import init_db
 
 
 @pytest.mark.asyncio
-async def test_e2e_proactive_maintenance_flow(monkeypatch):
+async def test_e2e_proactive_maintenance_flow(monkeypatch, tmp_path):
     """
     QA E2E Test: Heartbeat -> Detect Problem -> Fix (Create File) -> Notify Feishu.
     """
     # 1. Setup Isolated Environments
-    test_sqlite = "tests/data/e2e_l1.db"
-    test_duck = "tests/data/e2e_l3.duckdb"
-    if os.path.exists(test_sqlite):
-        os.remove(test_sqlite)
-    if os.path.exists(test_duck):
-        os.remove(test_duck)
+    test_sqlite = str(tmp_path / "e2e_l1.db")
+    test_duck = str(tmp_path / "e2e_l3.duckdb")
 
     monkeypatch.setenv("SQLITE_DB_URL", f"sqlite+aiosqlite:///{test_sqlite}")
 
-    def mock_duck_init(self, db_path=test_duck):
-        self.db_path = db_path
-        import duckdb
-
-        self.conn = duckdb.connect(db_path)
-        self._lock = threading.Lock()
-        self._init_schema()
-
-    from mirai.db.duck import DuckDBStorage
-
-    monkeypatch.setattr(DuckDBStorage, "__init__", mock_duck_init)
-
     await init_db()
+
+    # Create DuckDB storage with explicit path — no monkey-patching
+    storage = DuckDBStorage(db_path=test_duck)
 
     # 2. Setup Agent & Heartbeat
     provider = MockProvider()
@@ -46,7 +33,7 @@ async def test_e2e_proactive_maintenance_flow(monkeypatch):
     from mirai.agent.tools.shell import ShellTool
 
     tools = [ShellTool(), EditorTool()]
-    agent = await AgentLoop.create(provider, tools, "01AN4Z048W7N7DF3SQ5G16CYAJ")
+    agent = await AgentLoop.create(provider, tools, "01AN4Z048W7N7DF3SQ5G16CYAJ", l3_storage=storage)
 
     # Mock Feishu Notification
     notified_messages = []
@@ -80,9 +67,6 @@ async def test_e2e_proactive_maintenance_flow(monkeypatch):
     assert os.path.exists("maintenance_fixed.txt"), "E2E Failure: maintenance_fixed.txt was not created."
 
     # Verify cognitive traces in DuckDB
-    from mirai.db.duck import DuckDBStorage
-
-    storage = DuckDBStorage(test_duck)
     traces = await storage.get_recent_traces(agent.collaborator_id)
 
     # Check for specific trace types
@@ -102,6 +86,7 @@ async def test_e2e_proactive_maintenance_flow(monkeypatch):
     # Clean up
     if os.path.exists("maintenance_fixed.txt"):
         os.remove("maintenance_fixed.txt")
+    storage.close()
 
     print("\n[QA] E2E Proactive Maintenance Flow Verified.")
 

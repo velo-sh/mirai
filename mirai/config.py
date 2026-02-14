@@ -176,6 +176,8 @@ class MiraiConfig(BaseSettings):
         """Apply legacy Feishu env var overrides after normal loading, then validate."""
         import logging as _logging
 
+        _log = _logging.getLogger("mirai.config")
+
         legacy_map = {
             "app_id": "FEISHU_APP_ID",
             "app_secret": "FEISHU_APP_SECRET",
@@ -196,12 +198,26 @@ class MiraiConfig(BaseSettings):
             }
             provider_env_key = env_map.get(self.llm.provider)
             if provider_env_key and not os.getenv(provider_env_key):
-                _logging.getLogger("mirai.config").warning(
+                _log.warning(
                     "Provider '%s' selected but no API key configured. "
                     "Set llm.api_key in config.toml or %s environment variable.",
                     self.llm.provider,
                     provider_env_key,
                 )
+
+        # Interval sanity checks
+        if self.dreamer.interval < 60:
+            _log.warning(
+                "dreamer.interval=%ds is very low; dream cycles are expensive "
+                "LLM calls. Consider >= 600s for production.",
+                self.dreamer.interval,
+            )
+        if self.heartbeat.interval < 60:
+            _log.warning(
+                "heartbeat.interval=%.0fs is very low; each pulse triggers an "
+                "LLM round-trip. Consider >= 300s for production.",
+                self.heartbeat.interval,
+            )
 
     @classmethod
     def load(cls, config_path: Path | None = None) -> MiraiConfig:
