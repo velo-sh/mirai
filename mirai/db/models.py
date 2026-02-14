@@ -30,6 +30,13 @@ class DBTrace(BaseModel):
     importance: float = 0.0
     vector_id: str | None = None
 
+    @property
+    def metadata_json(self) -> dict[str, Any]:
+        return self.metadata
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
     @field_validator("metadata", mode="before")
     @classmethod
     def parse_json_string(cls, v: Any) -> Any:
@@ -49,3 +56,6 @@ class FeishuMessage(BaseModel):
     role: str
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)

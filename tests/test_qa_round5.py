@@ -429,7 +429,7 @@ class TestConfigCrossValidation:
 
         config_warnings = [r for r in caplog.records if "mirai.config" in r.name]
         assert len(config_warnings) == 1
-        assert "OPENAI_API_KEY" in config_warnings[0].message
+        assert "OPENAI_API_KEY" in config_warnings[0].getMessage()
 
     def test_no_warning_when_key_present(self, caplog, monkeypatch):
         """openai provider with API key set should not warn."""
@@ -477,8 +477,8 @@ class TestExceptionChaining:
                 pytest.fail(f"Found improper re-raise at line {i + 1}: {stripped}")
 
     def test_loop_uses_provider_error_for_fallback(self):
-        """loop.py should raise ProviderError, not RuntimeError, for fallback chain."""
-        loop_path = Path(__file__).parent.parent / "mirai" / "agent" / "loop.py"
+        """agent_loop.py should raise ProviderError, not RuntimeError, for fallback chain."""
+        loop_path = Path(__file__).parent.parent / "mirai" / "agent" / "agent_loop.py"
         source = loop_path.read_text()
         assert "ProviderError" in source
         assert 'raise ProviderError("All models in fallback chain failed")' in source

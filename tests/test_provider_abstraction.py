@@ -15,15 +15,12 @@ Test categories:
   8. Cross-provider message round-trip
 """
 
-import json
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
+from mirai.agent.models import ProviderResponse, TextBlock
 from mirai.agent.providers.base import ProviderProtocol
-
 
 # ---------------------------------------------------------------------------
 # 1. LLMConfig — new fields
@@ -35,36 +32,43 @@ class TestLLMConfigFields:
 
     def test_default_provider(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig()
         assert cfg.provider == "antigravity"
 
     def test_default_api_key_is_none(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig()
         assert cfg.api_key is None
 
     def test_default_base_url_is_none(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig()
         assert cfg.base_url is None
 
     def test_custom_provider(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig(provider="openai")
         assert cfg.provider == "openai"
 
     def test_custom_api_key(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig(api_key="sk-test-123")
         assert cfg.api_key == "sk-test-123"
 
     def test_custom_base_url(self):
         from mirai.config import LLMConfig
+
         cfg = LLMConfig(base_url="https://api.deepseek.com/v1")
         assert cfg.base_url == "https://api.deepseek.com/v1"
 
     def test_toml_provider_override(self, tmp_toml):
         from mirai.config import MiraiConfig
+
         toml_path = tmp_toml("""
 [llm]
 provider = "openai"
@@ -78,6 +82,7 @@ base_url = "https://custom.api/v1"
 
     def test_env_provider_override(self, monkeypatch):
         from mirai.config import MiraiConfig
+
         monkeypatch.setenv("MIRAI_LLM__PROVIDER", "anthropic")
         cfg = MiraiConfig.load()
         assert cfg.llm.provider == "anthropic"
@@ -111,8 +116,9 @@ class TestProviderFactory:
     def test_openai_provider_raises_without_key(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         from mirai.agent.providers.factory import create_provider
+        from mirai.errors import ProviderError
 
-        with pytest.raises(ValueError, match="requires an API key"):
+        with pytest.raises((ValueError, ProviderError), match="requires an API key"):
             create_provider(provider="openai", model="gpt-4o")
 
     def test_unknown_provider_falls_to_openai(self, monkeypatch):
@@ -163,9 +169,10 @@ class TestProviderFactory:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         from mirai.agent.providers.factory import create_provider
+        from mirai.errors import ProviderError
 
         with patch("mirai.auth.antigravity_auth.load_credentials", return_value=None):
-            with pytest.raises(ValueError, match="No API credentials"):
+            with pytest.raises((ValueError, ProviderError), match="No API credentials"):
                 create_provider(provider="antigravity")
 
 
@@ -181,7 +188,11 @@ class TestOpenAIProviderToolConversion:
         from mirai.agent.providers.openai import OpenAIProvider
 
         tools = [
-            {"name": "echo", "description": "Echo input", "input_schema": {"type": "object", "properties": {"msg": {"type": "string"}}}}
+            {
+                "name": "echo",
+                "description": "Echo input",
+                "input_schema": {"type": "object", "properties": {"msg": {"type": "string"}}},
+            }
         ]
         result = OpenAIProvider._convert_tools(tools)
         assert len(result) == 1
@@ -338,6 +349,7 @@ class TestAnthropicConvertMessages:
     @staticmethod
     def _convert(messages):
         from mirai.agent.providers.anthropic import AnthropicProvider
+
         return AnthropicProvider._convert_messages(messages)
 
     def test_user_message_passthrough(self):
@@ -355,19 +367,21 @@ class TestAnthropicConvertMessages:
         assert result[0]["content"] == [{"type": "text", "text": "Hi there"}]
 
     def test_assistant_with_tool_calls(self):
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_abc",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"msg": "test"}'},
-                    }
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"msg": "test"}'},
+                        }
+                    ],
+                }
+            ]
+        )
         assert len(result) == 1
         blocks = result[0]["content"]
         assert len(blocks) == 1
@@ -377,15 +391,17 @@ class TestAnthropicConvertMessages:
         assert blocks[0]["input"] == {"msg": "test"}
 
     def test_assistant_text_and_tool_calls(self):
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": "Let me check.",
-                "tool_calls": [
-                    {"id": "c1", "type": "function", "function": {"name": "status", "arguments": "{}"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "status", "arguments": "{}"}},
+                    ],
+                }
+            ]
+        )
         blocks = result[0]["content"]
         assert len(blocks) == 2
         assert blocks[0] == {"type": "text", "text": "Let me check."}
@@ -397,9 +413,7 @@ class TestAnthropicConvertMessages:
         assert result[0]["content"] == ""
 
     def test_tool_result_conversion(self):
-        result = self._convert([
-            {"role": "tool", "tool_call_id": "call_abc", "content": "Success!"}
-        ])
+        result = self._convert([{"role": "tool", "tool_call_id": "call_abc", "content": "Success!"}])
         assert len(result) == 1
         assert result[0]["role"] == "user"
         block = result[0]["content"][0]
@@ -415,15 +429,17 @@ class TestAnthropicConvertMessages:
 
     def test_malformed_arguments(self):
         """Invalid JSON in function arguments should default to empty dict."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "type": "function", "function": {"name": "broken", "arguments": "not json"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "broken", "arguments": "not json"}},
+                    ],
+                }
+            ]
+        )
         blocks = result[0]["content"]
         assert blocks[0]["input"] == {}
 
@@ -478,85 +494,90 @@ class TestMessageConverterEdgeCases:
     @staticmethod
     def _convert(messages):
         from mirai.agent.providers.message_converter import convert_messages
+
         return convert_messages(messages)
 
     def test_malformed_arguments_json(self):
         """Invalid JSON in tool_call arguments should default to {}."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "broken", "arguments": "{{invalid}}"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "broken", "arguments": "{{invalid}}"}},
+                    ],
+                }
+            ]
+        )
         fc = result[0]["parts"][0]["functionCall"]
         assert fc["args"] == {}
 
     def test_tool_call_missing_arguments(self):
         """Missing arguments field should default to {}."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "noop"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "noop"}},
+                    ],
+                }
+            ]
+        )
         fc = result[0]["parts"][0]["functionCall"]
         assert fc["args"] == {}
 
     def test_tool_call_missing_id(self):
         """Missing tool_call ID should still produce a functionCall."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"function": {"name": "test", "arguments": "{}"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"function": {"name": "test", "arguments": "{}"}},
+                    ],
+                }
+            ]
+        )
         fc = result[0]["parts"][0]["functionCall"]
         assert fc["name"] == "test"
         assert "id" not in fc
 
     def test_tool_result_missing_content(self):
         """Tool result with no content field should default to empty string."""
-        result = self._convert([
-            {"role": "tool", "tool_call_id": "c1"}
-        ])
+        result = self._convert([{"role": "tool", "tool_call_id": "c1"}])
         fr = result[0]["parts"][0]["functionResponse"]
         assert fr["response"]["result"] == ""
 
     def test_tool_result_missing_id(self):
         """Tool result with no tool_call_id should default to 'unknown'."""
-        result = self._convert([
-            {"role": "tool", "content": "some result"}
-        ])
+        result = self._convert([{"role": "tool", "content": "some result"}])
         fr = result[0]["parts"][0]["functionResponse"]
         assert fr["name"] == "unknown"
 
     def test_image_block_content(self):
         """Base64 image content should produce inlineData."""
-        result = self._convert([
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Describe this:"},
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": "abc123base64data",
+        result = self._convert(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this:"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": "abc123base64data",
+                            },
                         },
-                    },
-                ],
-            }
-        ])
+                    ],
+                }
+            ]
+        )
         parts = result[0]["parts"]
         assert len(parts) == 2
         assert parts[0] == {"text": "Describe this:"}
@@ -565,22 +586,22 @@ class TestMessageConverterEdgeCases:
 
     def test_image_block_without_base64_type(self):
         """Non-base64 image source should not produce inlineData."""
-        result = self._convert([
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "url", "url": "https://example.com/img.png"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "url", "url": "https://example.com/img.png"}},
+                    ],
+                }
+            ]
+        )
         # No parts can be created from a URL-type image source
         assert result == []
 
     def test_empty_text_in_list_content_skipped(self):
         """Empty text blocks in list content should be skipped."""
-        result = self._convert([
-            {"role": "user", "content": [{"type": "text", "text": ""}]}
-        ])
+        result = self._convert([{"role": "user", "content": [{"type": "text", "text": ""}]}])
         # Empty text → no parts → message dropped
         assert result == []
 
@@ -599,50 +620,54 @@ class TestMessageConverterEdgeCases:
 
     def test_unknown_block_type_ignored(self):
         """Unknown block types in list content should be silently skipped."""
-        result = self._convert([
-            {"role": "user", "content": [{"type": "audio", "data": "..."}]}
-        ])
+        result = self._convert([{"role": "user", "content": [{"type": "audio", "data": "..."}]}])
         assert result == []
 
     def test_thought_signature_only_on_truthy_values(self):
         """Empty or None thought_signature should not produce thoughtSignature key."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "test", "arguments": "{}"}, "thought_signature": ""},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "test", "arguments": "{}"}, "thought_signature": ""},
+                    ],
+                }
+            ]
+        )
         part = result[0]["parts"][0]
         assert "functionCall" in part
         assert "thoughtSignature" not in part
 
     def test_none_thought_signature_excluded(self):
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "test", "arguments": "{}"}, "thought_signature": None},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "test", "arguments": "{}"}, "thought_signature": None},
+                    ],
+                }
+            ]
+        )
         part = result[0]["parts"][0]
         assert "thoughtSignature" not in part
 
     def test_assistant_with_text_and_tool_calls(self):
         """Non-empty text + tool_calls should produce text part + functionCall parts."""
-        result = self._convert([
-            {
-                "role": "assistant",
-                "content": "Let me check...",
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "status", "arguments": "{}"}},
-                ],
-            }
-        ])
+        result = self._convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Let me check...",
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "status", "arguments": "{}"}},
+                    ],
+                }
+            ]
+        )
         parts = result[0]["parts"]
         assert len(parts) == 2
         assert parts[0] == {"text": "Let me check..."}
@@ -755,16 +780,19 @@ class TestProviderProtocol:
 
     def test_mock_provider_satisfies_protocol(self):
         from tests.mocks.providers import MockProvider
+
         p = MockProvider()
         assert isinstance(p, ProviderProtocol)
 
     def test_openai_provider_satisfies_protocol(self):
         from mirai.agent.providers.openai import OpenAIProvider
+
         p = OpenAIProvider(api_key="test", model="gpt-4o")
         assert isinstance(p, ProviderProtocol)
 
     def test_anthropic_provider_satisfies_protocol(self):
         from mirai.agent.providers.anthropic import AnthropicProvider
+
         p = AnthropicProvider(api_key="test", model="claude-sonnet-4-20250514")
         assert isinstance(p, ProviderProtocol)
 
@@ -795,6 +823,7 @@ class TestCrossProviderRoundTrip:
     def test_gemini_conversation_structure(self):
         """Gemini should have 4 messages (system filtered)."""
         from mirai.agent.providers.message_converter import convert_messages
+
         result = convert_messages(self.CONVERSATION)
         assert len(result) == 4
         roles = [m["role"] for m in result]
@@ -803,6 +832,7 @@ class TestCrossProviderRoundTrip:
     def test_anthropic_conversation_structure(self):
         """Anthropic should have 4 messages (system filtered)."""
         from mirai.agent.providers.anthropic import AnthropicProvider
+
         result = AnthropicProvider._convert_messages(self.CONVERSATION)
         assert len(result) == 4
         roles = [m["role"] for m in result]

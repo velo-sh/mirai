@@ -14,6 +14,7 @@ import pytest
 
 from mirai.agent.agent_loop import AgentLoop, RefinedStep
 from mirai.agent.models import ProviderResponse, TextBlock
+from mirai.errors import ProviderError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,7 +108,7 @@ class TestFallbackChain:
         loop = _make_loop(provider, fallback_models=["fb-1", "fb-2"])
         loop._build_system_prompt = AsyncMock(return_value="system prompt")
 
-        with pytest.raises(RuntimeError, match="Model fb-2 unavailable"):
+        with pytest.raises(ProviderError, match="Model fb-2 unavailable"):
             async for _ in loop._execute_cycle("Hello", model="primary"):
                 pass
 

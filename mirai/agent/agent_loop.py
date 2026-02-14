@@ -8,6 +8,8 @@ Identity management lives in :mod:`mirai.agent.identity`.
 Prompt construction lives in :mod:`mirai.agent.prompt`.
 """
 
+from __future__ import annotations
+
 import asyncio
 import enum
 import json
@@ -88,6 +90,10 @@ _load_soul = load_soul
 
 
 class AgentLoop:
+    # State Machine tracking (defaults for compatibility with brittle tests using __new__)
+    state: LoopState = LoopState.IDLE
+    runtime_overrides: dict[str, Any] = {}
+
     def __init__(
         self,
         provider: ProviderProtocol,

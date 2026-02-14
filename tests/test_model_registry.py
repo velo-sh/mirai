@@ -85,7 +85,9 @@ def _make_registry_from_data(path: Path, data: dict, **kwargs):
     registry._config_provider = kwargs.get("config_provider")
     registry._config_model = kwargs.get("config_model")
     registry.PATH = path
-    registry._data = data
+    from mirai.agent.registry_models import RegistryData
+
+    registry._data = RegistryData.from_dict(data)
     return registry
 
 
@@ -137,7 +139,7 @@ class TestRegistryLifecycle:
         # Point to a non-writable path
         registry.PATH = Path("/root/no_access/registry.json")
         # Should not raise
-        await registry._save()
+        registry._save()
         # In-memory state should still be valid
         assert registry.active_provider == "minimax"
 

@@ -73,9 +73,15 @@ class DuckDBStorage:
         columns = [desc[0] for desc in rel.description]
         return [dict(zip(columns, row, strict=False)) for row in rel.fetchall()]
 
-    async def append_trace(self, trace: DBTrace):
+    async def append_trace(self, trace: DBTrace | None = None, **kwargs: Any) -> None:
         """Append a cognitive trace using the DBTrace model."""
-        metadata_json = orjson.dumps(trace.metadata).decode()
+        if trace is None:
+            # Legacy support for tests that pass keyword arguments directly
+            trace = DBTrace.model_validate(kwargs)
+
+        metadata_json = orjson.dumps(
+            trace.metadata_json if hasattr(trace, "metadata_json") else trace.metadata
+        ).decode()
         await asyncio.to_thread(
             self._execute,
             """

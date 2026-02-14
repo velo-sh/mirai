@@ -8,6 +8,7 @@ for compile-time safety and IDE navigation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -20,6 +21,12 @@ class RegistryModelEntry:
     reasoning: bool = False
     vision: bool = False
 
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
 
 @dataclass
 class RegistryProviderData:
@@ -28,6 +35,12 @@ class RegistryProviderData:
     available: bool = False
     env_key: str = ""
     models: list[RegistryModelEntry] = field(default_factory=list)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
 
 
 @dataclass
@@ -39,6 +52,12 @@ class RegistryData:
     active_provider: str | None = None
     active_model: str | None = None
     providers: dict[str, RegistryProviderData] = field(default_factory=dict)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
 
     # ------------------------------------------------------------------
     # Serialization helpers

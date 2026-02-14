@@ -11,7 +11,7 @@ class MiraiError(Exception):
     """Base class for all Mirai application errors."""
 
 
-class ProviderError(MiraiError):
+class ProviderError(MiraiError, ValueError):
     """An LLM provider failed (auth, rate-limit, model not found, etc.)."""
 
 
