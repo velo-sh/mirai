@@ -24,6 +24,25 @@ class QuotaManager:
         self._last_update = 0.0
         self._lock = asyncio.Lock()
 
+    @classmethod
+    def for_testing(
+        cls,
+        *,
+        quotas: dict[str, float] | None = None,
+        credentials: dict[str, Any] | None = None,
+    ) -> "QuotaManager":
+        """Create a QuotaManager for testing without real credentials.
+
+        Pre-populates quotas and sets ``_last_update`` to now so the
+        manager never tries to refresh from the network.
+        """
+        qm = cls.__new__(cls)
+        qm.credentials = credentials or {}
+        qm._quotas = quotas or {}
+        qm._last_update = time.time()
+        qm._lock = asyncio.Lock()
+        return qm
+
     async def get_used_pct(self, model_id: str) -> float:
         """Get the current usage percentage for a model ID."""
         await self._maybe_refresh()

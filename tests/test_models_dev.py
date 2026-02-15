@@ -26,6 +26,8 @@ from mirai.agent.models_dev import (
     ExternalModelData,
     ModelsDevSource,
 )
+from mirai.agent.providers.base import ModelInfo
+from mirai.agent.registry import ModelRegistry
 from mirai.agent.registry_models import RegistryData, RegistryModelEntry
 
 # ---------------------------------------------------------------------------
@@ -922,8 +924,6 @@ class TestRegistryIntegration:
     @pytest.mark.asyncio
     async def test_refresh_enriches_models(self, tmp_path: Path) -> None:
         """Verify that refresh() calls enrich() and fills external metadata."""
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",
@@ -968,8 +968,6 @@ class TestRegistryIntegration:
     @pytest.mark.asyncio
     async def test_refresh_without_enrichment_source(self, tmp_path: Path) -> None:
         """refresh() should work fine when _enrichment_source is None."""
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",
@@ -1003,8 +1001,6 @@ class TestRegistryIntegration:
     @pytest.mark.asyncio
     async def test_refresh_enrichment_fetch_failure(self, tmp_path: Path) -> None:
         """If enrichment source.fetch() raises, refresh() should still succeed."""
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",
@@ -1041,10 +1037,6 @@ class TestRegistryIntegration:
         coroutine so provider scanning is never blocked.
         """
         import asyncio
-
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",
@@ -1101,10 +1093,6 @@ class TestRegistryIntegration:
         We use event ordering to prove that both coroutines overlap in time.
         """
         import asyncio
-
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",
@@ -1164,10 +1152,6 @@ class TestRegistryIntegration:
         remains responsive while refresh() is running.
         """
         import asyncio
-
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "reg.json",

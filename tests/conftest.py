@@ -77,3 +77,15 @@ def mock_agent(duckdb_storage):
     agent.base_system_prompt = "You are Mira, a helpful collaborator."
     agent.soul_content = ""
     return agent
+
+
+@pytest.fixture
+def mock_registry(tmp_path):
+    """Create a ModelRegistry for testing without disk I/O.
+
+    Uses ``ModelRegistry.for_testing()`` with defaults. Override via
+    ``ModelRegistry.for_testing(data=...)`` if you need custom data.
+    """
+    from mirai.agent.registry import ModelRegistry
+
+    return ModelRegistry.for_testing(path=tmp_path / "registry.json")

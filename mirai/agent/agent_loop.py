@@ -124,6 +124,43 @@ class AgentLoop:
         self.role: str = ""
         self.soul_content: str = ""
 
+    @classmethod
+    def for_testing(
+        cls,
+        *,
+        provider: ProviderProtocol | None = None,
+        tools: dict[str, Any] | None = None,
+        collaborator_id: str = "test-collab",
+        fallback_models: list[str] | None = None,
+        name: str = "TestAgent",
+        role: str = "tester",
+        base_system_prompt: str = "You are a test agent.",
+        soul_content: str = "",
+        l3_storage: DuckDBStorage | None = None,
+        l2_storage: VectorStore | None = None,
+        embedder: Any = None,
+    ) -> AgentLoop:
+        """Create an AgentLoop instance for testing without heavy I/O.
+
+        Bypasses DuckDB/VectorStore initialization and sets identity fields
+        that are normally loaded from disk via ``_initialize()``.
+        """
+        loop = cls.__new__(cls)
+        loop.provider = provider  # type: ignore[assignment]
+        loop.tools = tools or {}
+        loop.collaborator_id = collaborator_id
+        loop.fallback_models = fallback_models or []
+        loop.state = LoopState.IDLE
+        loop.runtime_overrides = {}
+        loop.name = name
+        loop.role = role
+        loop.base_system_prompt = base_system_prompt
+        loop.soul_content = soul_content
+        loop.l3_storage = l3_storage  # type: ignore[assignment]
+        loop.l2_storage = l2_storage  # type: ignore[assignment]
+        loop.embedder = embedder or MockEmbeddingProvider()
+        return loop
+
     def swap_provider(self, new_provider: ProviderProtocol) -> None:
         """Hot-swap the LLM provider at runtime.
 

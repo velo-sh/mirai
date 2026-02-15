@@ -23,30 +23,20 @@ from mirai.errors import ProviderError
 
 def _make_loop(provider, fallback_models: list[str] | None = None) -> AgentLoop:
     """Construct an AgentLoop without async init (identity is faked)."""
-    loop = AgentLoop.__new__(AgentLoop)
-    loop.provider = provider
-    loop.tools = {}
-    loop.collaborator_id = "test-collab"
-    loop.fallback_models = fallback_models or []
-
-    # Fake identity fields normally set by _initialize()
-    loop.name = "TestAgent"
-    loop.role = "tester"
-    loop.base_system_prompt = "You are a test agent."
-    loop.soul_content = ""
-
-    # Stub storage
-    from mirai.agent.providers import MockEmbeddingProvider
     from mirai.db.duck import DuckDBStorage
     from mirai.memory.vector_db import VectorStore
 
-    loop.l3_storage = MagicMock(spec=DuckDBStorage)
-    loop.l3_storage.append_trace = AsyncMock()
-    loop.l2_storage = MagicMock(spec=VectorStore)
-    loop.l2_storage.query = AsyncMock(return_value=[])
-    loop.embedder = MockEmbeddingProvider()
+    l3 = MagicMock(spec=DuckDBStorage)
+    l3.append_trace = AsyncMock()
+    l2 = MagicMock(spec=VectorStore)
+    l2.query = AsyncMock(return_value=[])
 
-    return loop
+    return AgentLoop.for_testing(
+        provider=provider,
+        fallback_models=fallback_models,
+        l3_storage=l3,
+        l2_storage=l2,
+    )
 
 
 def _ok_response(text: str = "Hello", model: str = "test-model") -> ProviderResponse:

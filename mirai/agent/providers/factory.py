@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
+from mirai.agent.free_providers import get_free_provider_spec
+from mirai.agent.providers.anthropic import AnthropicProvider
+from mirai.agent.providers.antigravity import AntigravityProvider, load_credentials
 from mirai.agent.providers.base import ProviderProtocol
+from mirai.agent.providers.minimax import MiniMaxProvider
+from mirai.agent.providers.openai import OpenAIProvider
 from mirai.errors import ProviderError
 from mirai.logging import get_logger
 
@@ -32,8 +37,6 @@ def create_provider(
         ProviderError: If no valid credentials are found.
     """
     if provider == "antigravity":
-        from mirai.agent.providers.antigravity import AntigravityProvider, load_credentials
-
         creds = load_credentials()
         if creds:
             try:
@@ -47,16 +50,12 @@ def create_provider(
         log.warning("antigravity_unavailable_trying_fallbacks")
 
     if provider == "anthropic" or (provider == "antigravity" and os.getenv("ANTHROPIC_API_KEY")):
-        from mirai.agent.providers.anthropic import AnthropicProvider
-
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if key:
             log.info("provider_initialized", provider="anthropic", model=model)
             return AnthropicProvider(api_key=key, model=model)
 
     if provider == "minimax":
-        from mirai.agent.providers.minimax import MiniMaxProvider
-
         key = api_key or os.getenv("MINIMAX_API_KEY")
         if not key:
             raise ProviderError(
@@ -68,12 +67,8 @@ def create_provider(
     # ------------------------------------------------------------------
     # Data-driven: check free provider catalog
     # ------------------------------------------------------------------
-    from mirai.agent.free_providers import get_free_provider_spec
-
     free_spec = get_free_provider_spec(provider)
     if free_spec is not None:
-        from mirai.agent.providers.openai import OpenAIProvider
-
         key = api_key or os.getenv(free_spec.env_key)
         if not key:
             raise ProviderError(
@@ -99,8 +94,6 @@ def create_provider(
     # Fallback: generic OpenAI-compatible provider
     # ------------------------------------------------------------------
     if provider == "openai" or provider not in ("antigravity", "anthropic", "minimax"):
-        from mirai.agent.providers.openai import OpenAIProvider
-
         key = api_key or os.getenv("OPENAI_API_KEY")
         if not key:
             raise ProviderError(

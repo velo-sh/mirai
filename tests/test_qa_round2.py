@@ -16,6 +16,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mirai.agent.agent_loop import AgentLoop
+from mirai.agent.models import ProviderResponse, TextBlock
+from mirai.agent.providers.base import ModelInfo
+from mirai.agent.providers.openai import OpenAIProvider
+from mirai.agent.providers.quota import QuotaManager
+from mirai.agent.registry import ModelRegistry
+from mirai.agent.registry_models import RegistryData
+from mirai.agent.tools.system import SystemTool
+from mirai.bootstrap import _wait_for_duckdb_lock
+from mirai.config import MiraiConfig
+from mirai.db.duck import DuckDBStorage
+from mirai.errors import ProviderError, StorageError
+
 # ===========================================================================
 # 1. DuckDB Lock Hardening
 # ===========================================================================
@@ -26,7 +39,6 @@ class TestDuckDBLockHardening:
 
     def test_no_wal_file_returns_immediately(self, tmp_path):
         """When no .wal file exists, function returns instantly."""
-        from mirai.bootstrap import _wait_for_duckdb_lock
 
         db_path = str(tmp_path / "test.duckdb")
         start = time.monotonic()
@@ -38,8 +50,6 @@ class TestDuckDBLockHardening:
         """When .wal file exists but DB is not locked,
         function connects successfully and returns."""
         import duckdb
-
-        from mirai.bootstrap import _wait_for_duckdb_lock
 
         db_path = str(tmp_path / "test.duckdb")
 
@@ -58,7 +68,6 @@ class TestDuckDBLockHardening:
     def test_lock_held_then_released(self, tmp_path):
         """When DB is initially locked but released during timeout,
         function should succeed after retries."""
-        from mirai.bootstrap import _wait_for_duckdb_lock
 
         db_path = str(tmp_path / "test_retry.duckdb")
         wal_path = Path(db_path + ".wal")
@@ -87,7 +96,6 @@ class TestDuckDBLockHardening:
     def test_lock_timeout_logs_warning(self, tmp_path):
         """When lock cannot be acquired within timeout,
         function should log warning and return (not raise)."""
-        from mirai.bootstrap import _wait_for_duckdb_lock
 
         db_path = str(tmp_path / "stuck.duckdb")
         wal_path = Path(db_path + ".wal")
@@ -107,7 +115,6 @@ class TestDuckDBLockHardening:
 
     def test_zero_timeout_returns_fast(self, tmp_path):
         """With timeout=0, function should give up quickly even if locked."""
-        from mirai.bootstrap import _wait_for_duckdb_lock
 
         db_path = str(tmp_path / "zero.duckdb")
         wal_path = Path(db_path + ".wal")
@@ -134,8 +141,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.fixture
     def registry(self, tmp_path):
         """Build a ModelRegistry with sample data."""
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
 
         reg = ModelRegistry.for_testing(
             path=tmp_path / "registry.json",
@@ -163,7 +168,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_provider_without_quota_manager(self, registry):
         """Provider with no quota_manager → quota_data is None, catalog renders without annotations."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_provider = MagicMock(spec=[])  # no attributes at all
         tool = SystemTool(registry=registry, provider=mock_provider)
@@ -175,7 +179,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_no_provider_at_all(self, registry):
         """When provider is None, quota_data is None → catalog renders normally."""
-        from mirai.agent.tools.system import SystemTool
 
         tool = SystemTool(registry=registry, provider=None)
         result = await tool._list_models()
@@ -186,7 +189,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_quota_boundary_80_percent(self, registry):
         """Model at exactly 80% usage should show percentage annotation."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {"MiniMax-M2.5": 80.0}
@@ -203,7 +205,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_quota_boundary_79_percent_no_annotation(self, registry):
         """Model at 79% usage should NOT show percentage annotation."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {"MiniMax-M2.5": 79.0}
@@ -221,7 +222,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_quota_boundary_100_percent(self, registry):
         """Model at exactly 100% should show exhausted emoji."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {"MiniMax-M2.5": 100.0}
@@ -238,7 +238,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_quota_refresh_error_handled(self, registry):
         """If QuotaManager._maybe_refresh raises, _list_models should still return catalog."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {"MiniMax-M2.5": 42.0}  # stale data
@@ -255,7 +254,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_quota_dict(self, registry):
         """Empty _quotas dict → no annotations at all."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {}
@@ -273,7 +271,6 @@ class TestQuotaDataWiringEdgeCases:
     @pytest.mark.asyncio
     async def test_quota_for_unknown_model(self, registry):
         """Quota for model not in registry should not cause issues."""
-        from mirai.agent.tools.system import SystemTool
 
         mock_qm = MagicMock()
         mock_qm._quotas = {"unknown-model-xyz": 100.0}
@@ -301,8 +298,6 @@ class TestGracefulShutdown:
     @pytest.mark.asyncio
     async def test_restart_closes_duckdb_storage(self):
         """Verify _do_restart calls l3_storage.close() before restart."""
-        from mirai.agent.tools.system import SystemTool
-        from mirai.config import MiraiConfig
 
         # Build tool with mock agent_loop that has l3_storage
         mock_storage = MagicMock()
@@ -326,8 +321,6 @@ class TestGracefulShutdown:
     @pytest.mark.asyncio
     async def test_restart_without_agent_loop(self):
         """Restart should still work when agent_loop is None."""
-        from mirai.agent.tools.system import SystemTool
-        from mirai.config import MiraiConfig
 
         tool = SystemTool(config=MiraiConfig())
 
@@ -340,8 +333,6 @@ class TestGracefulShutdown:
     @pytest.mark.asyncio
     async def test_restart_with_storage_close_error(self):
         """Restart should succeed even if l3_storage.close() raises."""
-        from mirai.agent.tools.system import SystemTool
-        from mirai.config import MiraiConfig
 
         mock_storage = MagicMock()
         mock_storage.close = MagicMock(side_effect=RuntimeError("DB already closed"))
@@ -367,31 +358,20 @@ class TestFallbackChainEdgeCases:
     """Additional fallback chain edge cases beyond test_fallback_chain.py."""
 
     def _make_loop(self, provider, fallback_models=None):
-        from mirai.agent.agent_loop import AgentLoop
 
-        loop = AgentLoop.__new__(AgentLoop)
-        loop.provider = provider
-        loop.tools = {}
-        loop.collaborator_id = "test-collab"
-        loop.fallback_models = fallback_models or []
-        loop.name = "TestAgent"
-        loop.role = "tester"
-        loop.base_system_prompt = "You are a test agent."
-        loop.soul_content = ""
+        l3 = MagicMock()
+        l3.append_trace = AsyncMock()
+        l2 = MagicMock()
+        l2.query = AsyncMock(return_value=[])
 
-        loop.l3_storage = MagicMock()
-        loop.l3_storage.append_trace = AsyncMock()
-        loop.l2_storage = MagicMock()
-        loop.l2_storage.query = AsyncMock(return_value=[])
-
-        from mirai.agent.providers import MockEmbeddingProvider
-
-        loop.embedder = MockEmbeddingProvider()
-
-        return loop
+        return AgentLoop.for_testing(
+            provider=provider,
+            fallback_models=fallback_models,
+            l3_storage=l3,
+            l2_storage=l2,
+        )
 
     def _ok_response(self, text="Hello", model="test"):
-        from mirai.agent.models import ProviderResponse, TextBlock
 
         return ProviderResponse(
             content=[TextBlock(text=text)],
@@ -402,7 +382,6 @@ class TestFallbackChainEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_fallback_list_primary_fails(self):
         """No fallback models configured + primary fails → ProviderError wrapping original."""
-        from mirai.errors import ProviderError
 
         provider = MagicMock()
 
@@ -458,8 +437,6 @@ class TestFallbackChainEdgeCases:
 
         loop = self._make_loop(provider, fallback_models=["fb-1", "fb-2"])
         loop._build_system_prompt = AsyncMock(return_value="system")
-
-        from mirai.errors import ProviderError
 
         with pytest.raises(ProviderError, match="Error from fb-2"):
             async for _ in loop._execute_cycle("Hello", model="p"):
@@ -546,7 +523,6 @@ class TestOpenAIRemoteDiscovery:
     @pytest.mark.asyncio
     async def test_empty_api_response_returns_fallback(self):
         """If API returns empty model list, should return current model as fallback."""
-        from mirai.agent.providers.openai import OpenAIProvider
 
         p = OpenAIProvider(api_key="test-key", model="gpt-4o")
         mock_resp = MagicMock()
@@ -560,7 +536,6 @@ class TestOpenAIRemoteDiscovery:
     @pytest.mark.asyncio
     async def test_api_returns_multiple_models(self):
         """Verify multiple models from API are all captured."""
-        from mirai.agent.providers.openai import OpenAIProvider
 
         mock_models = []
         for name in ["gpt-4o", "gpt-4o-mini", "o1-preview"]:
@@ -582,8 +557,6 @@ class TestOpenAIRemoteDiscovery:
     @pytest.mark.asyncio
     async def test_subclass_with_catalog_ignores_api(self):
         """Subclass with MODEL_CATALOG should never call the API."""
-        from mirai.agent.providers.base import ModelInfo
-        from mirai.agent.providers.openai import OpenAIProvider
 
         class LocalProvider(OpenAIProvider):
             MODEL_CATALOG = [ModelInfo(id="local-model", name="Local")]
@@ -607,7 +580,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_initial_usage_is_zero(self):
         """Before any refresh, all models report 0% usage."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "test"})
         # Prevent actual API call
@@ -618,7 +590,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_is_available_at_99_percent(self):
         """Model at 99% should still be available."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "test"})
         qm._quotas = {"model-a": 99.0}
@@ -629,7 +600,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_is_available_at_100_percent(self):
         """Model at 100% should NOT be available."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "test"})
         qm._quotas = {"model-a": 100.0}
@@ -640,7 +610,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_cache_ttl_prevents_extra_refresh(self):
         """Within TTL, _maybe_refresh should not call fetch_usage again."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "test", "project_id": "proj"})
         qm._last_update = time.time()
@@ -653,7 +622,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_expired_cache_triggers_refresh(self):
         """After TTL expires, _maybe_refresh should call fetch_usage."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "token", "project_id": "proj"})
         qm._last_update = time.time() - (qm.CACHE_TTL + 1)  # expired
@@ -667,7 +635,6 @@ class TestQuotaManager:
     @pytest.mark.asyncio
     async def test_refresh_error_preserves_old_quotas(self):
         """If fetch_usage fails, old quota data should be preserved."""
-        from mirai.agent.providers.quota import QuotaManager
 
         qm = QuotaManager(credentials={"access": "token", "project_id": "proj"})
         qm._quotas = {"model-a": 25.0}
@@ -690,7 +657,6 @@ class TestDuckDBStorageClose:
 
     def test_close_releases_connection(self, tmp_path):
         """After close(), conn should be None."""
-        from mirai.db.duck import DuckDBStorage
 
         db_path = str(tmp_path / "close_test.duckdb")
         storage = DuckDBStorage(db_path=db_path)
@@ -700,7 +666,6 @@ class TestDuckDBStorageClose:
 
     def test_double_close_is_safe(self, tmp_path):
         """Calling close() twice should not raise."""
-        from mirai.db.duck import DuckDBStorage
 
         db_path = str(tmp_path / "double_close.duckdb")
         storage = DuckDBStorage(db_path=db_path)
@@ -710,7 +675,6 @@ class TestDuckDBStorageClose:
 
     def test_close_then_reconnect(self, tmp_path):
         """After close(), creating a new DuckDBStorage on same path should work."""
-        from mirai.db.duck import DuckDBStorage
 
         db_path = str(tmp_path / "reconnect.duckdb")
         storage1 = DuckDBStorage(db_path=db_path)
@@ -723,14 +687,12 @@ class TestDuckDBStorageClose:
     @pytest.mark.asyncio
     async def test_operations_after_close_handled(self, tmp_path):
         """Operations after close should raise or be handled gracefully."""
-        from mirai.db.duck import DuckDBStorage
 
         db_path = str(tmp_path / "ops_after_close.duckdb")
         storage = DuckDBStorage(db_path=db_path)
         storage.close()
 
         # Attempt to write after close should raise StorageError
-        from mirai.errors import StorageError
 
         with pytest.raises(StorageError, match="DuckDB connection is closed"):
             await storage.append_trace(id="test", collaborator_id="c1", trace_type="message", content="after close")
@@ -747,9 +709,6 @@ class TestListModelsDispatch:
     @pytest.mark.asyncio
     async def test_execute_list_models_action(self):
         """execute(action='list_models') should call _list_models and return a string."""
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
-        from mirai.agent.tools.system import SystemTool
 
         reg = ModelRegistry.for_testing(
             path=Path("/tmp/test_reg.json"),
@@ -778,9 +737,6 @@ class TestListModelsDispatch:
     @pytest.mark.asyncio
     async def test_list_models_shows_active_provider(self):
         """Catalog text should indicate the active provider."""
-        from mirai.agent.registry import ModelRegistry
-        from mirai.agent.registry_models import RegistryData
-        from mirai.agent.tools.system import SystemTool
 
         reg = ModelRegistry.for_testing(
             path=Path("/tmp/test_reg2.json"),

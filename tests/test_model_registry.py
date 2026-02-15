@@ -529,8 +529,7 @@ class TestModelSwitching:
         new_provider.provider_name = "anthropic"
         new_provider.model = "claude-sonnet-4"
 
-        loop = AgentLoop.__new__(AgentLoop)
-        loop.provider = old_provider
+        loop = AgentLoop.for_testing(provider=old_provider)
 
         loop.swap_provider(new_provider)
 
