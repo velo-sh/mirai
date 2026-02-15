@@ -112,17 +112,16 @@ class TracingConfig(BaseModel):
 class AuthConfig(BaseModel):
     """OAuth / authentication endpoint configuration.
 
-    Centralizes Google Antigravity OAuth credentials and URLs so they
-    can be provided via config.toml or environment variables instead
-    of being hardcoded in source code.
+    Centralizes Google Antigravity OAuth credentials and URLs.
+    The client_id and client_secret are application identifiers
+    (not user secrets) — standard for desktop OAuth apps.
 
-    Required environment variables (or config.toml fields):
-      MIRAI_AUTH__CLIENT_ID
-      MIRAI_AUTH__CLIENT_SECRET
+    User tokens (access_token, refresh_token) are stored separately
+    in ~/.mirai/antigravity_credentials.json with chmod 600.
     """
 
-    client_id: str = ""
-    client_secret: str = ""
+    client_id: str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    client_secret: str = "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"
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
     redirect_uri: str = "http://localhost:51121/oauth-callback"

@@ -34,38 +34,15 @@ if TYPE_CHECKING:
 
 
 def _get_auth_config() -> "AuthConfig":
-    """Lazily load AuthConfig from MiraiConfig.
-
-    Priority:
-      1. Environment variables / config.toml (via MiraiConfig)
-      2. Saved credentials file (~/.mirai/antigravity_credentials.json)
-      3. Empty defaults (will fail on use if not set)
-    """
+    """Lazily load AuthConfig from MiraiConfig, falling back to defaults."""
     try:
         from mirai.config import MiraiConfig
 
-        cfg = MiraiConfig.load().auth
+        return MiraiConfig.load().auth
     except Exception:
         from mirai.config import AuthConfig
 
-        cfg = AuthConfig()
-
-    # If config doesn't have credentials, try loading from saved credential file
-    if not cfg.client_id or not cfg.client_secret:
-        saved = load_credentials()
-        if saved:
-            from mirai.config import AuthConfig
-
-            return AuthConfig(
-                client_id=saved.get("client_id", cfg.client_id),
-                client_secret=saved.get("client_secret", cfg.client_secret),
-                auth_url=cfg.auth_url,
-                token_url=cfg.token_url,
-                redirect_uri=cfg.redirect_uri,
-                code_assist_endpoints=cfg.code_assist_endpoints,
-            )
-
-    return cfg
+        return AuthConfig()
 
 
 DEFAULT_PROJECT_ID = "rising-fact-p41fc"
@@ -326,9 +303,6 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
     6. Save credentials to disk
     """
     cfg = auth_config or _get_auth_config()
-
-    if not cfg.client_id or not cfg.client_secret:
-        raise ValueError("OAuth client_id and client_secret are required. Run: python -m mirai.auth.auth_cli login")
     verifier, challenge = _generate_pkce()
     state = secrets.token_hex(16)
     auth_url = _build_auth_url(challenge, state, auth_config=cfg)

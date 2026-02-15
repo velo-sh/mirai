@@ -49,9 +49,7 @@ def _reset_label(iso_ts: str | None) -> str:
 
 
 async def cmd_login():
-    """Run the OAuth login flow, prompting for credentials if needed."""
-    from mirai.auth.antigravity_auth import _get_auth_config
-
+    """Run the OAuth login flow."""
     existing = load_credentials()
     if existing:
         print(f"Existing credentials found for: {existing.get('email', 'unknown')}")
@@ -59,53 +57,8 @@ async def cmd_login():
         if answer != "y":
             print("Keeping existing credentials.")
             return
-
-    # Check if client credentials are available
-    cfg = _get_auth_config()
-    if not cfg.client_id or not cfg.client_secret:
-        print("\n╔══════════════════════════════════════════════════════════╗")
-        print("║         Google OAuth Client Setup Required              ║")
-        print("╚══════════════════════════════════════════════════════════╝")
-        print()
-        print("  To authenticate, you need a Google OAuth Client ID.")
-        print("  If you don't have one yet:")
-        print()
-        print("  1. Go to: https://console.cloud.google.com/apis/credentials")
-        print("  2. Click '+ CREATE CREDENTIALS' → 'OAuth client ID'")
-        print("  3. Application type: 'Desktop app'")
-        print("  4. Copy the Client ID and Client Secret below")
-        print()
-
-        client_id = cfg.client_id
-        client_secret = cfg.client_secret
-
-        if not client_id:
-            client_id = input("  Client ID: ").strip()
-            if not client_id:
-                print("\n  ❌ Client ID is required.")
-                sys.exit(1)
-
-        if not client_secret:
-            client_secret = input("  Client Secret: ").strip()
-            if not client_secret:
-                print("\n  ❌ Client Secret is required.")
-                sys.exit(1)
-
-        # Inject into AuthConfig for this session
-        from mirai.config import AuthConfig
-
-        cfg = AuthConfig(
-            client_id=client_id,
-            client_secret=client_secret,
-            auth_url=cfg.auth_url,
-            token_url=cfg.token_url,
-            redirect_uri=cfg.redirect_uri,
-            code_assist_endpoints=cfg.code_assist_endpoints,
-        )
-        print()
-
     try:
-        await login(auth_config=cfg)
+        await login()
     except KeyboardInterrupt:
         print("\nLogin cancelled.")
         sys.exit(1)
