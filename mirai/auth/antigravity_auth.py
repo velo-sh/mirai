@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import os
 import secrets
+import time
 import webbrowser
 from base64 import urlsafe_b64encode
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -137,8 +138,6 @@ async def exchange_code(code: str, verifier: str) -> dict:
     if not refresh:
         raise ValueError("Token exchange returned no refresh_token")
 
-    import time
-
     expires = int(time.time()) + expires_in - 300  # 5 min buffer
     return {"access": access, "refresh": refresh, "expires": expires}
 
@@ -162,8 +161,6 @@ async def refresh_access_token(refresh_token: str) -> dict:
 
     if not access:
         raise ValueError("Token refresh returned no access_token")
-
-    import time
 
     expires = int(time.time()) + expires_in - 300
     return {"access": access, "expires": expires}
@@ -260,8 +257,6 @@ async def ensure_valid_credentials() -> dict:
             f"No Antigravity credentials found at {CREDENTIALS_PATH}. "
             "Run `python -m mirai.auth.auth_cli` to authenticate."
         )
-
-    import time
 
     if time.time() >= creds.get("expires", 0):
         print("[antigravity] Access token expired, refreshing...")

@@ -1,4 +1,5 @@
 from mirai.agent.agent_loop import AgentLoop
+from mirai.agent.models import ProviderResponse
 from mirai.db.duck import DuckDBStorage
 from mirai.logging import get_logger
 from mirai.utils.service import BaseBackgroundService
@@ -56,8 +57,6 @@ class AgentDreamer(BaseBackgroundService):
         # We use the agent's run method but with a special message to avoid standard loop logic if needed
         # Or just use the provider directly for a clean "pure reflection"
         try:
-            from mirai.agent.models import ProviderResponse
-
             # Use direct provider call for reflection to bypass memory injection/archive logic
             # This is a meta-operation.
             response: ProviderResponse = await self.agent.provider.generate_response(

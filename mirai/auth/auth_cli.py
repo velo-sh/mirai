@@ -10,6 +10,7 @@ Usage:
 import argparse
 import asyncio
 import sys
+import time
 from datetime import UTC, datetime
 
 from mirai.auth.antigravity_auth import (
@@ -127,8 +128,6 @@ async def cmd_status():
     if not creds:
         print("Not authenticated. Run: python -m mirai.auth.auth_cli login")
         sys.exit(1)
-
-    import time
 
     email = creds.get("email", "unknown")
     project = creds.get("project_id", "unknown")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import orjson
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -38,8 +39,6 @@ class DBTrace(BaseModel):
     @classmethod
     def parse_json_string(cls, v: Any) -> Any:
         if isinstance(v, str):
-            import orjson
-
             return orjson.loads(v)
         return v
 

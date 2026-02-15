@@ -18,7 +18,9 @@ This module provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,8 +192,6 @@ class FreeProviderSource:
             ("openrouter", self._fetch_openrouter()),
             ("sambanova", self._fetch_sambanova()),
         ]
-
-        import asyncio
 
         results = await asyncio.gather(
             *[f for _, f in fetchers],
@@ -421,7 +421,6 @@ async def check_provider_health(
     Only checks providers whose API key is set in the environment.
     Returns a map of provider name → health status.
     """
-    import os
 
     if specs is None:
         specs = FREE_PROVIDER_SPECS
@@ -437,8 +436,6 @@ async def check_provider_health(
 
     if not tasks:
         return results
-
-    import asyncio
 
     probes = await asyncio.gather(
         *[t for _, t in tasks],

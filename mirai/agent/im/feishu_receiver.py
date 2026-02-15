@@ -23,6 +23,7 @@ from lark_oapi.api.im.v1 import (
     ReplyMessageRequestBody,
 )
 
+from mirai.db.models import FeishuMessage
 from mirai.logging import get_logger
 
 log = get_logger("mirai.feishu_receiver")
@@ -354,8 +355,6 @@ class FeishuEventReceiver:
 
         # Also persist to L3 storage
         if self._storage:
-            from mirai.db.models import FeishuMessage
-
             try:
                 await self._storage.save_feishu_history(
                     FeishuMessage(chat_id=chat_id, role="user", content=user_msg_str)

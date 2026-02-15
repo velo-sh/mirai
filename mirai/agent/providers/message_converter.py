@@ -8,6 +8,8 @@ import json
 import time
 from typing import Any
 
+import orjson
+
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 
 
@@ -66,12 +68,14 @@ def convert_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     elif block.get("type") == "image":
                         source = block.get("source", {})
                         if source.get("type") == "base64":
-                            parts.append({
-                                "inlineData": {
-                                    "mimeType": source.get("media_type", "image/png"),
-                                    "data": source.get("data", ""),
+                            parts.append(
+                                {
+                                    "inlineData": {
+                                        "mimeType": source.get("media_type", "image/png"),
+                                        "data": source.get("data", ""),
+                                    }
                                 }
-                            })
+                            )
 
         # Tool calls from assistant message → functionCall parts
         for tc in msg.get("tool_calls", []):
@@ -125,7 +129,6 @@ def parse_sse_response(raw_text: str, model_id: str | None = None) -> ProviderRe
     Parse SSE stream response and build ProviderResponse.
     Uses orjson for fast JSON parsing of each SSE data line.
     """
-    import orjson
 
     content_blocks: list[TextBlock | ToolUseBlock] = []
     stop_reason = "end_turn"

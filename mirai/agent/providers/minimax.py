@@ -15,13 +15,14 @@ Usage in config.toml::
 
 from __future__ import annotations
 
+import json
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
-from mirai.agent.models import ProviderResponse
+from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.agent.providers.openai import OpenAIProvider
 from mirai.logging import get_logger
@@ -116,10 +117,6 @@ class MiniMaxProvider(OpenAIProvider):
         ``<think>...</think>`` tags in ``message.content``.  We strip
         them so the reasoning never leaks into user-facing text.
         """
-        import json
-
-        from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
-
         choice = response.choices[0]
         message = choice.message
         content_blocks: list[TextBlock | ToolUseBlock] = []
@@ -209,8 +206,6 @@ class MiniMaxProvider(OpenAIProvider):
                     total_limit += entry.get("current_interval_total_count", 0)
                     # Use end_time from the first entry as reset_at
                     if reset_at is None and entry.get("end_time"):
-                        from datetime import datetime
-
                         ts = entry["end_time"] / 1000  # ms → s
                         reset_at = datetime.fromtimestamp(ts, tz=UTC).isoformat()
                     plan = plan or entry.get("model_name")

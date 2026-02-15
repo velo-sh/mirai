@@ -89,10 +89,6 @@ class SystemTool(BaseTool):
             v is not None for v in (config, registry, agent_loop, provider, storage, start_time)
         ):
             # Legacy support for tests that pass components individually
-            import time
-
-            from mirai.agent.tools.base import ToolContext
-
             context = ToolContext(
                 config=config,
                 storage=storage or kwargs.get("storage"),

@@ -15,7 +15,7 @@ import enum
 import json
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import orjson
 from ulid import ULID
@@ -28,6 +28,7 @@ from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
+from mirai.db.models import DBTrace
 from mirai.errors import ProviderError
 from mirai.logging import get_logger
 from mirai.memory.vector_db import VectorStore
@@ -172,8 +173,6 @@ class AgentLoop:
 
     async def _archive_trace(self, content: str, trace_type: str, metadata: dict[str, Any] | None = None) -> str:
         """Helper to save a trace to the L3 (HDD) storage using DuckDB."""
-        from mirai.db.models import DBTrace
-
         trace = DBTrace(
             id=str(ULID()),
             collaborator_id=self.collaborator_id,
@@ -300,8 +299,6 @@ class AgentLoop:
                         try:
                             # Prepare config with overrides
                             loop_config: dict[str, Any] = {**self.provider.config_dict(), **self.runtime_overrides}
-                            from typing import cast
-
                             response = await self.provider.generate_response(
                                 model=cast(str, attempt_model),
                                 system=full_system_prompt,
