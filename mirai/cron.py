@@ -1,16 +1,18 @@
-"""Cron Service — JSON5 file-based agent-driven task scheduler.
+"""Cron scheduler — JSON5-backed, smart-timer, async-native.
 
-Provides lightweight periodic scheduling with:
-- JSON5 file persistence (human-readable, commentable, Git-friendly)
-- System vs agent job separation (two files)
-- Smart timer (wakes at next due job, not fixed polling)
-- Exponential error backoff (30s → 60min)
-- External edit detection (mtime-based reload)
-- Progressive error handling (warn → disable)
-- Missed job recovery on startup
+Design principles
+-----------------
+* **One source of truth**: system jobs live in ``system_cron.json5`` (managed
+  by code / ops), agent-created jobs in ``jobs.json5`` (managed at runtime via
+  tool calls).  Both files are JSON5 so humans can add comments.
 
-Design: Cron is a pure *timer* — it wakes the agent, who uses its own tools
-(e.g. ``im_tool``) to communicate.  Cron does NOT deliver messages itself.
+* **Smart timer**: instead of fixed-interval polling the scheduler computes
+  the next due job and arms an ``asyncio`` timer to that instant.  A 60 s cap
+  guards against missed wakeups.
+
+* **Concurrency cap + error backoff**: at most ``MAX_CONCURRENT_JOBS`` tasks
+  in flight; exponential backoff on repeated failures with auto-disable after
+  ``DISABLE_THRESHOLD`` consecutive errors.
 """
 
 from __future__ import annotations
@@ -24,7 +26,11 @@ import zoneinfo
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mirai.agent.agent_loop import AgentLoop
+    from mirai.agent.im.base import BaseIMProvider
 
 import json5
 from croniter import croniter  # type: ignore[import-untyped]
@@ -319,11 +325,11 @@ class CronScheduler:
     def __init__(
         self,
         state_dir: Path,
-        agent: Any = None,
+        agent: AgentLoop | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.agent = agent
-        self.im_provider: Any = None  # injected by bootstrap for curator alerts only
+        self.im_provider: BaseIMProvider | None = None  # injected by bootstrap
 
         # Delegate data ownership to CronStore
         self.store = CronStore(state_dir)
@@ -571,6 +577,14 @@ class CronScheduler:
     def _save_agent_jobs(self) -> None:
         """Shim — delegates to ``self.store.save_agent_jobs()``."""
         self.store.save_agent_jobs()
+
+    def _maybe_reload(self) -> bool:
+        """Shim — delegates to ``self.store.maybe_reload()``."""
+        return self.store.maybe_reload()
+
+    def _startup_recovery(self) -> None:
+        """Shim — delegates to ``self.store.startup_recovery()``."""
+        self.store.startup_recovery()
 
     # ------------------------------------------------------------------
     # Concurrency management

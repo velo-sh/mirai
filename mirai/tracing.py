@@ -26,13 +26,19 @@ from opentelemetry.sdk.trace.export import (
 _tracer: trace.Tracer | None = None
 
 
-def setup_tracing(service_name: str = "mirai", console: bool = False) -> None:
+def setup_tracing(
+    service_name: str = "mirai",
+    console: bool = False,
+    otlp_endpoint: str | None = None,
+) -> None:
     """Initialize OpenTelemetry tracing.
 
     Args:
         service_name: Service name for the resource attribute.
         console: If True, export spans to console (dev mode).
                  If False, try OTLP exporter or fall back to no-op.
+        otlp_endpoint: Explicit OTLP endpoint. Falls back to
+                       ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var if not set.
     """
     global _tracer
 
@@ -46,12 +52,12 @@ def setup_tracing(service_name: str = "mirai", console: bool = False) -> None:
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     else:
         # Try OTLP exporter if endpoint is configured
-        otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-        if otlp_endpoint:
+        endpoint = otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if endpoint:
             try:
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-                exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
+                exporter = OTLPSpanExporter(endpoint=endpoint)
                 provider.add_span_processor(BatchSpanProcessor(exporter))
             except ImportError:
                 # OTLP exporter not installed, fall back to console

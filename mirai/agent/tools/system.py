@@ -1,9 +1,10 @@
 """System Tool — runtime introspection and lifecycle management.
 
 Actions:
-  - status:  Runtime health check (PID, uptime, memory, model, tools).
-  - usage:   Per-model quota usage from the Antigravity API.
-  - restart: Graceful self-restart via os.execv.
+  - status:        Runtime health check (PID, uptime, memory, model, tools).
+  - usage:         Per-model quota usage from the Antigravity API.
+  - patch_runtime: Dynamically adjust temperature/max_tokens without restart.
+  - restart:       Graceful self-restart via ``os.execv()``.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ class SystemTool(BaseTool):
                 "Introspect and control the Mirai runtime. "
                 "Actions: 'status' (read-only health check), "
                 "'usage' (per-model quota usage and reset times), "
+                "'patch_runtime' (adjust temperature/max_tokens without restart), "
                 "'restart' (graceful self-restart)."
             ),
             "input_schema": {
@@ -83,8 +85,12 @@ class SystemTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "usage", "restart"],
+                        "enum": ["status", "usage", "patch_runtime", "restart"],
                         "description": "The action to perform.",
+                    },
+                    "patch": {
+                        "type": "object",
+                        "description": "Key-value pairs to override (only for patch_runtime).",
                     },
                 },
                 "required": ["action"],
@@ -100,9 +106,11 @@ class SystemTool(BaseTool):
             return await self._status()
         if action == "usage":
             return await self._usage()
+        if action == "patch_runtime":
+            return await self._patch_runtime(kwargs.get("patch", {}))
         if action == "restart":
             return await self._restart()
-        return f"Error: Unknown action '{action}'. Valid actions: status, usage, restart."
+        return f"Error: Unknown action '{action}'. Valid actions: status, usage, patch_runtime, restart."
 
     # ------------------------------------------------------------------
     # Helpers
@@ -185,6 +193,38 @@ class SystemTool(BaseTool):
             report["models"].append(entry)
 
         return orjson.dumps(report, option=orjson.OPT_INDENT_2).decode()
+
+    # ------------------------------------------------------------------
+    # Action: patch_runtime
+    # ------------------------------------------------------------------
+
+    _ALLOWED_RUNTIME_KEYS = {"temperature", "max_tokens", "top_p", "top_k"}
+
+    async def _patch_runtime(self, patch: dict[str, Any]) -> str:
+        """Apply validated runtime overrides without restart."""
+        if not self._agent_loop:
+            return "Error: No agent loop available."
+        if not patch:
+            return "Error: No patch data provided."
+
+        applied: dict[str, Any] = {}
+        ignored: list[str] = []
+
+        for key, value in patch.items():
+            if key in self._ALLOWED_RUNTIME_KEYS:
+                self._agent_loop.runtime_overrides[key] = value
+                applied[key] = value
+            else:
+                ignored.append(key)
+
+        parts: list[str] = []
+        if applied:
+            parts.append(f"✅ Successfully applied: {applied}")
+        if ignored:
+            parts.append(f"⚠️ Ignored unknown keys: {ignored}")
+        if not parts:
+            return "Error: No valid keys in patch."
+        return " | ".join(parts)
 
     # ------------------------------------------------------------------
     # Action: restart

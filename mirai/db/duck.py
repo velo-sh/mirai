@@ -60,9 +60,15 @@ class DuckDBStorage:
                 pass
             self.conn = None
 
-    def _init_schema(self):
-        assert self.conn is not None
-        self.conn.execute("""
+    # Schema version. Bump when adding new migrations.
+    SCHEMA_VERSION = 1
+
+    # Ordered list of migration functions: (version, callable).
+    # Each callable receives the DuckDB connection.
+    _MIGRATIONS: list[tuple[int, str]] = [
+        (
+            1,
+            """
             CREATE TABLE IF NOT EXISTS cognitive_traces (
                 id VARCHAR PRIMARY KEY,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -72,16 +78,50 @@ class DuckDBStorage:
                 metadata_json JSON,
                 importance DOUBLE,
                 vector_id VARCHAR
-            )
-        """)
-        self.conn.execute("""
+            );
             CREATE TABLE IF NOT EXISTS feishu_history (
                 chat_id VARCHAR,
                 role VARCHAR,
                 content TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """,
+        ),
+        # Future migrations go here:
+        # (2, "ALTER TABLE cognitive_traces ADD COLUMN source VARCHAR DEFAULT 'unknown';"),
+    ]
+
+    def _init_schema(self) -> None:
+        assert self.conn is not None
+
+        # Create schema_meta table if it doesn't exist
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key VARCHAR PRIMARY KEY,
+                value VARCHAR
             )
         """)
+
+        # Read current version
+        result = self.conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
+        current_version = int(result[0]) if result else 0
+
+        # Apply pending migrations
+        for version, sql in self._MIGRATIONS:
+            if version > current_version:
+                _log.info("applying_migration", version=version)
+                self.conn.execute(sql)
+                self.conn.execute(
+                    """
+                    INSERT INTO schema_meta (key, value)
+                    VALUES ('schema_version', ?)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    [str(version)],
+                )
+                current_version = version
+
+        _log.debug("schema_ready", version=current_version)
 
     def _check_conn(self):
         """Raise if connection has been closed."""

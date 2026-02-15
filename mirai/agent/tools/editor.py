@@ -38,7 +38,7 @@ class EditorTool(BaseTool):
                 return "Error: Security Error: Absolute paths are not allowed."
 
             safe_path = target_path
-        except Exception as e:
+        except (ValueError, OSError) as e:
             return f"Error: Security Error: Invalid path provided: {str(e)}"
 
         if action == "write":
@@ -51,7 +51,7 @@ class EditorTool(BaseTool):
                 with open(safe_path, "w") as f:
                     f.write(content)
                 return f"Successfully wrote {len(content)} characters to {safe_path}."
-            except Exception as e:
+            except OSError as e:
                 return f"Error writing file: {str(e)}"
 
         return f"Error: Unknown action '{action}'."
