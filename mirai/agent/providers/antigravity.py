@@ -24,6 +24,7 @@ from mirai.agent.models import ProviderResponse
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.agent.providers.message_converter import convert_messages, convert_tools, parse_sse_response
 from mirai.agent.providers.quota import QuotaManager
+from mirai.auth.antigravity_auth import load_credentials, refresh_access_token, save_credentials
 from mirai.logging import get_logger
 from mirai.tracing import get_tracer
 
@@ -109,8 +110,6 @@ class AntigravityProvider:
     DEFAULT_MODEL = "claude-sonnet-4-5-20250514"
 
     def __init__(self, credentials: dict[str, Any] | None = None, model: str = "claude-sonnet-4-20250514"):
-        from mirai.auth.antigravity_auth import load_credentials
-
         loaded = credentials or load_credentials()
         if not loaded:
             raise FileNotFoundError(
@@ -158,8 +157,6 @@ class AntigravityProvider:
     async def _ensure_fresh_token(self) -> None:
         """Refresh the access token if expired."""
         if time.time() >= self.credentials.get("expires", 0):
-            from mirai.auth.antigravity_auth import refresh_access_token, save_credentials
-
             log.info("token_refresh_started")
             refreshed = await refresh_access_token(self.credentials["refresh"])
             self.credentials["access"] = refreshed["access"]
