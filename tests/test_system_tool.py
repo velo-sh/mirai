@@ -1,14 +1,12 @@
-"""Unit tests for mirai.agent.tools.system — SystemTool self-evolution capabilities."""
+"""Unit tests for mirai.agent.tools.system — SystemTool (status, usage, restart)."""
 
 import json
 import os
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mirai.agent.providers.antigravity import AntigravityProvider
-from mirai.agent.tools.system import SystemTool, _serialize_toml
+from mirai.agent.tools.system import SystemTool
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,60 +54,6 @@ class TestSystemToolStatus:
 
 
 # ---------------------------------------------------------------------------
-# patch_config
-# ---------------------------------------------------------------------------
-
-
-class TestSystemToolPatchConfig:
-    @pytest.mark.asyncio
-    async def test_patch_whitelisted_key(self, tmp_path: Path):
-        config_file = tmp_path / "config.toml"
-        with patch("mirai.agent.tools.system._CONFIG_PATH", config_file):
-            tool = SystemTool(config=_FakeConfig())
-            result = await tool.execute(
-                action="patch_config",
-                patch={"heartbeat": {"interval": 1800}},
-            )
-            assert "✅" in result
-            assert "heartbeat.interval" in result
-            # Verify the file was written
-            content = config_file.read_text()
-            assert "1800" in content
-
-    @pytest.mark.asyncio
-    async def test_patch_rejected_key(self):
-        tool = SystemTool(config=_FakeConfig())
-        result = await tool.execute(
-            action="patch_config",
-            patch={"database": {"sqlite_url": "sqlite:///hacked.db"}},
-        )
-        assert "Error" in result
-        assert "database.sqlite_url" in result
-
-    @pytest.mark.asyncio
-    async def test_patch_empty_patch(self):
-        tool = SystemTool(config=_FakeConfig())
-        result = await tool.execute(action="patch_config", patch={})
-        assert "Error" in result
-
-    @pytest.mark.asyncio
-    async def test_patch_merges_with_existing(self, tmp_path: Path):
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[heartbeat]\ninterval = 3600.0\nenabled = true\n")
-        with patch("mirai.agent.tools.system._CONFIG_PATH", config_file):
-            tool = SystemTool(config=_FakeConfig())
-            result = await tool.execute(
-                action="patch_config",
-                patch={"heartbeat": {"interval": 900}},
-            )
-            assert "✅" in result
-            content = config_file.read_text()
-            assert "900" in content
-            # enabled should still be present
-            assert "enabled" in content
-
-
-# ---------------------------------------------------------------------------
 # restart
 # ---------------------------------------------------------------------------
 
@@ -142,7 +86,6 @@ class TestSystemToolEdgeCases:
         defn = tool.definition
         assert defn["name"] == "mirai_system"
         assert "status" in str(defn)
-        assert "patch_config" in str(defn)
         assert "restart" in str(defn)
 
     @pytest.mark.asyncio
@@ -154,48 +97,13 @@ class TestSystemToolEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# _serialize_toml
-# ---------------------------------------------------------------------------
-
-
-class TestSerializeToml:
-    def test_basic_sections(self):
-        data = {
-            "heartbeat": {"interval": 1800, "enabled": True},
-            "llm": {"default_model": "gemini-3-flash"},
-        }
-        result = _serialize_toml(data)
-        assert "[heartbeat]" in result
-        assert "interval = 1800" in result
-        assert "enabled = true" in result
-        assert "[llm]" in result
-        assert 'default_model = "gemini-3-flash"' in result
-
-    def test_float_values(self):
-        data = {"heartbeat": {"interval": 3600.0}}
-        result = _serialize_toml(data)
-        assert "interval = 3600.0" in result
-
-    def test_bool_false(self):
-        data = {"heartbeat": {"enabled": False}}
-        result = _serialize_toml(data)
-        assert "enabled = false" in result
-
-
-# ---------------------------------------------------------------------------
 # usage
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_provider(credentials: dict | None = None) -> AntigravityProvider:
-    """Create a mock AntigravityProvider with fake credentials.
-
-    Uses MagicMock(spec=...) so isinstance() checks pass and the mock
-    automatically tracks protocol changes in AntigravityProvider.
-    """
-    from unittest.mock import MagicMock
-
-    provider = MagicMock(spec=AntigravityProvider)
+def _make_fake_provider(credentials: dict | None = None) -> MagicMock:
+    """Create a mock provider with fake credentials."""
+    provider = MagicMock()
     provider.credentials = credentials or {
         "access": "fake-token-123",
         "refresh": "fake-refresh",

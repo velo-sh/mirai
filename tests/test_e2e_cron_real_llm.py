@@ -1,6 +1,6 @@
 """Real E2E tests for cron tool actions — calls a live LLM (MiniMax).
 
-Unlike test_e2e_cron_tool.py which tests the SystemTool → CronScheduler path
+Unlike test_e2e_cron_tool.py which tests the CronTool → CronScheduler path
 in isolation, these tests wire up a **real AgentLoop** with a **real LLM provider**
 (MiniMax) and verify the agent can autonomously use cron tools.
 
@@ -26,7 +26,7 @@ load_dotenv()
 from mirai.agent.agent_loop import AgentLoop  # noqa: E402
 from mirai.agent.providers.factory import create_provider  # noqa: E402
 from mirai.agent.tools.base import ToolContext  # noqa: E402
-from mirai.agent.tools.system import SystemTool  # noqa: E402
+from mirai.agent.tools.cron_tool import CronTool  # noqa: E402
 from mirai.config import MiraiConfig  # noqa: E402
 from mirai.cron import CronScheduler, _save_json5_atomic  # noqa: E402
 
@@ -75,20 +75,20 @@ def provider():
 
 
 @pytest.fixture
-def system_tool(cron_scheduler: CronScheduler) -> SystemTool:
-    """SystemTool wired with a real CronScheduler (but no LLM)."""
+def cron_tool(cron_scheduler: CronScheduler) -> CronTool:
+    """CronTool wired with a real CronScheduler (but no LLM)."""
     config = MiraiConfig.load()
     ctx = ToolContext(
         config=config,
         cron_scheduler=cron_scheduler,
         start_time=0.0,
     )
-    return SystemTool(context=ctx)
+    return CronTool(context=ctx)
 
 
 @pytest.fixture
-def agent(provider, system_tool: SystemTool, tmp_path: Path) -> AgentLoop:
-    """Create a real AgentLoop with the SystemTool and MiniMax provider.
+def agent(provider, cron_tool: CronTool, tmp_path: Path) -> AgentLoop:
+    """Create a real AgentLoop with the CronTool and MiniMax provider.
 
     Uses an isolated temp DuckDB so tests can run alongside the live server.
     """
@@ -97,7 +97,7 @@ def agent(provider, system_tool: SystemTool, tmp_path: Path) -> AgentLoop:
     storage = DuckDBStorage(db_path=str(tmp_path / "test_e2e.duckdb"))
     loop = AgentLoop(
         provider=provider,
-        tools=[system_tool],
+        tools=[cron_tool],
         collaborator_id="test-e2e-cron",
         l3_storage=storage,
         base_system_prompt=(
@@ -117,12 +117,12 @@ def agent(provider, system_tool: SystemTool, tmp_path: Path) -> AgentLoop:
 class TestCronWithRealLLM:
     """E2E tests that call a real LLM to exercise cron tool usage."""
 
-    async def test_agent_lists_cron_jobs(self, agent: AgentLoop, system_tool: SystemTool):
+    async def test_agent_lists_cron_jobs(self, agent: AgentLoop, cron_tool: CronTool):
         """Agent should be able to list cron jobs when asked.
 
         This test verifies the full chain:
-          User message → AgentLoop.run() → LLM decides to call mirai_system
-          → SystemTool.execute(action='list_cron_jobs') → CronScheduler
+          User message → AgentLoop.run() → LLM decides to call mirai_cron
+          → CronTool.execute(action='list_cron_jobs') → CronScheduler
           → response back through agent
         """
         result = await agent.run("List all my cron jobs using the mirai_system tool.")
@@ -131,7 +131,7 @@ class TestCronWithRealLLM:
         # The agent should mention something about jobs or cron
         # (it might say "no jobs" or "0 jobs" since the scheduler is empty)
 
-    async def test_agent_adds_cron_job(self, agent: AgentLoop, system_tool: SystemTool, cron_scheduler: CronScheduler):
+    async def test_agent_adds_cron_job(self, agent: AgentLoop, cron_tool: CronTool, cron_scheduler: CronScheduler):
         """Agent should successfully add a cron job when instructed.
 
         This test verifies:
@@ -156,9 +156,7 @@ class TestCronWithRealLLM:
             f"Expected job 'e2e:llm-test' in scheduler, got: {job_ids}. Agent response: {result}"
         )
 
-    async def test_agent_add_then_remove(
-        self, agent: AgentLoop, system_tool: SystemTool, cron_scheduler: CronScheduler
-    ):
+    async def test_agent_add_then_remove(self, agent: AgentLoop, cron_tool: CronTool, cron_scheduler: CronScheduler):
         """Agent should be able to add and then remove a cron job.
 
         Full lifecycle via LLM:
@@ -189,9 +187,7 @@ class TestCronWithRealLLM:
             f"Job not removed. Agent said: {remove_result}"
         )
 
-    async def test_agent_refuses_system_job(
-        self, agent: AgentLoop, system_tool: SystemTool, cron_scheduler: CronScheduler
-    ):
+    async def test_agent_refuses_system_job(self, agent: AgentLoop, cron_tool: CronTool, cron_scheduler: CronScheduler):
         """Agent should relay the system job protection error.
 
         Even if instructed, the tool should refuse to add/remove sys: jobs.
@@ -227,7 +223,7 @@ class TestCronWithRealLLM:
         assert any(kw in result_lower for kw in rejection_keywords), f"Expected rejection message, agent said: {result}"
 
     async def test_tool_call_verified_via_scheduler_state(
-        self, agent: AgentLoop, system_tool: SystemTool, cron_scheduler: CronScheduler
+        self, agent: AgentLoop, cron_tool: CronTool, cron_scheduler: CronScheduler
     ):
         """Verify the LLM actually invoked the tool by checking scheduler state.
 
@@ -256,11 +252,11 @@ class TestCronWithRealLLM:
         assert "e2e:verify" in content
 
     async def test_list_returns_structured_data(
-        self, agent: AgentLoop, system_tool: SystemTool, cron_scheduler: CronScheduler
+        self, agent: AgentLoop, cron_tool: CronTool, cron_scheduler: CronScheduler
     ):
         """After adding a job, listing should show it in the agent response."""
         # Add a job directly (bypass LLM for setup)
-        await system_tool.execute(
+        await cron_tool.execute(
             action="add_cron_job",
             cron_job={
                 "id": "e2e:listed",

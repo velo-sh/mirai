@@ -232,10 +232,13 @@ class MiraiApp:
             )
 
             from mirai.agent.tools.base import ToolContext
+            from mirai.agent.tools.config_tool import ConfigTool
+            from mirai.agent.tools.cron_tool import CronTool
             from mirai.agent.tools.echo import EchoTool
             from mirai.agent.tools.editor import EditorTool
             from mirai.agent.tools.git import GitTool
             from mirai.agent.tools.im import IMTool
+            from mirai.agent.tools.model import ModelTool
             from mirai.agent.tools.shell import ShellTool
             from mirai.agent.tools.workspace import WorkspaceTool
 
@@ -256,6 +259,9 @@ class MiraiApp:
                 EditorTool(context=context),
                 GitTool(context=context),
                 system_tool,
+                ModelTool(context=context),
+                ConfigTool(context=context),
+                CronTool(context=context),
                 im_tool,
             ]
             self._tool_context = context  # keep ref for im_provider wiring
