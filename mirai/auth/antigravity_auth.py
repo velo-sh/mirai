@@ -311,8 +311,11 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
     _OAuthCallbackHandler.code = None
     _OAuthCallbackHandler.state = None
 
-    # Start callback server
+    # Start callback server.
+    # Browsers may open preconnect TCP connections that never send data.
+    # Without a timeout, handle() blocks on readline() → shutdown() deadlocks.
     server = HTTPServer(("127.0.0.1", 51121), _OAuthCallbackHandler)
+    server.timeout = 2  # seconds — drop idle preconnect sockets
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
@@ -327,6 +330,7 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
         await asyncio.sleep(0.5)
 
     server.shutdown()
+    server.server_close()
 
     code = _OAuthCallbackHandler.code
     returned_state = _OAuthCallbackHandler.state
