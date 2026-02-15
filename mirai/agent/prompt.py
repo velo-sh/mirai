@@ -11,8 +11,6 @@ from typing import Any
 import orjson
 
 from mirai.agent.providers.base import ProviderProtocol
-from mirai.logging import get_logger
-
 from mirai.agent.tools.base import BaseTool
 
 
@@ -67,11 +65,11 @@ async def build_system_prompt(
         if raw_traces:
             memory_context = "\n### Recovered Memories (L3 Raw Context):\n"
             for trace in raw_traces:
-                memory_context += f"- [{trace['trace_type']}] {trace['content']}\n"
+                memory_context += f"- [{trace.trace_type}] {trace.content}\n"
 
     # Lightweight runtime info (full model catalog is via list_models tool)
-    provider_name = getattr(provider, "provider_name", "unknown")
-    current_model = getattr(provider, "model", "unknown")
+    provider_name = provider.provider_name
+    current_model = provider.model
     runtime_info = f"Provider: {provider_name} | Model: {current_model}"
 
     # Tools section (dynamic — reads descriptions from each tool's definition)
@@ -94,5 +92,3 @@ async def build_system_prompt(
         "If you want to call a tool, emit a functionCall; do NOT describe the call in prose."
     )
     return prompt
-
-

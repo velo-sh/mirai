@@ -229,8 +229,8 @@ class SystemTool(BaseTool):
     # ------------------------------------------------------------------
     async def _get_available_models(self) -> list[str]:
         """Query the provider's QuotaManager for actually available models."""
-        if self._provider and hasattr(self._provider, "quota_manager"):
-            qm = self._provider.quota_manager
+        qm = getattr(self._provider, "quota_manager", None)
+        if qm is not None:
             await qm._maybe_refresh()
             return sorted(qm._quotas.keys())
         return []
@@ -244,8 +244,8 @@ class SystemTool(BaseTool):
             return "Error: Model registry not available."
         # Fetch quota data if provider has a QuotaManager
         quota_data: dict[str, float] | None = None
-        if self._provider and hasattr(self._provider, "quota_manager"):
-            qm = self._provider.quota_manager
+        qm = getattr(self._provider, "quota_manager", None) if self._provider else None
+        if qm is not None:
             try:
                 await qm._maybe_refresh()
             except Exception:
@@ -325,8 +325,8 @@ class SystemTool(BaseTool):
             "available_models": available,
             "config_path": str(_CONFIG_PATH),
             "config_exists": _CONFIG_PATH.exists(),
-            "heartbeat_interval": getattr(self._config.heartbeat, "interval", None) if self._config else None,
-            "heartbeat_enabled": getattr(self._config.heartbeat, "enabled", None) if self._config else None,
+            "heartbeat_interval": self._config.heartbeat.interval if self._config else None,
+            "heartbeat_enabled": self._config.heartbeat.enabled if self._config else None,
         }
         return orjson.dumps(info, option=orjson.OPT_INDENT_2).decode()
 
@@ -335,16 +335,18 @@ class SystemTool(BaseTool):
     # ------------------------------------------------------------------
     async def _usage(self) -> str:
         """Return per-model quota usage from the Antigravity API."""
-        if not self._provider or not hasattr(self._provider, "credentials"):
+        if not self._provider or not getattr(self._provider, "credentials", None):
             return "Error: Provider not available for usage query."
 
         try:
             # Ensure token is fresh
-            if hasattr(self._provider, "_ensure_fresh_token"):
-                await self._provider._ensure_fresh_token()
+            refresh_fn = getattr(self._provider, "_ensure_fresh_token", None)
+            if refresh_fn:
+                await refresh_fn()
 
-            token = self._provider.credentials.get("access", "")
-            project_id = self._provider.credentials.get("project_id", "")
+            credentials = getattr(self._provider, "credentials", {})
+            token = credentials.get("access", "")
+            project_id = credentials.get("project_id", "")
 
             if not token:
                 return "Error: No access token available."
@@ -482,7 +484,7 @@ class SystemTool(BaseTool):
                     pass  # storage may already be closing
 
             # Close DuckDB before spawning replacement to release file locks
-            if self._agent_loop and hasattr(self._agent_loop, "l3_storage"):
+            if self._agent_loop and self._agent_loop.l3_storage:
                 try:
                     self._agent_loop.l3_storage.close()
                     log.info("duckdb_closed_for_restart")

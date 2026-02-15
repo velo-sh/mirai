@@ -115,9 +115,7 @@ class DuckDBStorage:
             # Legacy support for tests that pass keyword arguments directly
             trace = DBTrace.model_validate(kwargs)
 
-        metadata_json = orjson.dumps(
-            trace.metadata_json if hasattr(trace, "metadata_json") else trace.metadata
-        ).decode()
+        metadata_json = orjson.dumps(trace.metadata_json).decode()
         await asyncio.to_thread(
             self._execute,
             """

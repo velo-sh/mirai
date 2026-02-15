@@ -32,6 +32,7 @@ class FeishuProvider(BaseIMProvider):
             self.client = (
                 lark.Client.builder().app_id(app_id).app_secret(app_secret).log_level(lark.LogLevel.INFO).build()
             )
+        self._webhook_http: Any = None  # lazy httpx.AsyncClient
 
     # ------------------------------------------------------------------
     # Auto-discovery: list groups the bot has joined
@@ -160,10 +161,12 @@ class FeishuProvider(BaseIMProvider):
         while remaining:
             chunk = remaining[:MAX_CHUNK]
             remaining = remaining[MAX_CHUNK:]
-            elements.append({
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": chunk},
-            })
+            elements.append(
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": chunk},
+                }
+            )
 
         card: dict[str, Any] = {
             "config": {"wide_screen_mode": True},
@@ -215,7 +218,7 @@ class FeishuProvider(BaseIMProvider):
         """POST to a Feishu custom bot webhook."""
         import httpx
 
-        if not hasattr(self, "_webhook_http"):
+        if self._webhook_http is None:
             self._webhook_http = httpx.AsyncClient(timeout=10.0, http2=True)
 
         try:
@@ -224,7 +227,7 @@ class FeishuProvider(BaseIMProvider):
                 self.webhook_url,
                 json={"msg_type": msg_type, "content": content},
             )
-            return resp.status_code == 200
+            return bool(resp.status_code == 200)
         except Exception as e:
             log.error("feishu_webhook_error", error=str(e))
             return False
