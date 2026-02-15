@@ -158,6 +158,8 @@ class TestQuotaDataWiringEdgeCases:
         reg._config_provider = "minimax"
         reg._config_model = "MiniMax-M2.5"
         reg._enrichment_source = None
+        reg._free_source = None
+        reg._health_status = {}
         return reg
 
     @pytest.mark.asyncio
@@ -768,6 +770,8 @@ class TestListModelsDispatch:
         reg._config_provider = "mock"
         reg._config_model = "mock-model"
         reg._enrichment_source = None
+        reg._free_source = None
+        reg._health_status = {}
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")
@@ -799,6 +803,8 @@ class TestListModelsDispatch:
         reg._config_provider = "minimax"
         reg._config_model = "M2.5"
         reg._enrichment_source = None
+        reg._free_source = None
+        reg._health_status = {}
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")
