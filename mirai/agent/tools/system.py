@@ -335,18 +335,17 @@ class SystemTool(BaseTool):
     # ------------------------------------------------------------------
     async def _usage(self) -> str:
         """Return per-model quota usage from the Antigravity API."""
-        if not self._provider or not getattr(self._provider, "credentials", None):
+        from mirai.agent.providers.antigravity import AntigravityProvider
+
+        if not isinstance(self._provider, AntigravityProvider) or not self._provider.credentials:
             return "Error: Provider not available for usage query."
 
         try:
             # Ensure token is fresh
-            refresh_fn = getattr(self._provider, "_ensure_fresh_token", None)
-            if refresh_fn:
-                await refresh_fn()
+            await self._provider._ensure_fresh_token()
 
-            credentials = getattr(self._provider, "credentials", {})
-            token = credentials.get("access", "")
-            project_id = credentials.get("project_id", "")
+            token = self._provider.credentials.get("access", "")
+            project_id = self._provider.credentials.get("project_id", "")
 
             if not token:
                 return "Error: No access token available."

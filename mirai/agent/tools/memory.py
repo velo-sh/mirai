@@ -5,27 +5,13 @@ from mirai.agent.tools.base import BaseTool
 
 class MemorizeTool(BaseTool):
     def __init__(self, context: Any = None, **kwargs: Any) -> None:
-        if context is None and any(k in kwargs for k in ("collaborator_id", "vector_store", "l3_storage", "storage")):
-            # Legacy support for tests that pass components directly
-            from mirai.agent.tools.base import ToolContext
-
-            context = ToolContext(
-                agent_loop=kwargs.get("agent_loop") or kwargs.get("agent"),
-                storage=kwargs.get("l3_storage") or kwargs.get("storage"),
-            )
-            # We'll need a way for MemorizeTool to use this collaborator_id if context.config is missing
-            self._legacy_collaborator_id = kwargs.get("collaborator_id")
-            self._legacy_vector_store = kwargs.get("vector_store")
-
         super().__init__(context)
-        # Convenience aliases
-        self.collaborator_id = getattr(self, "_legacy_collaborator_id", None) or (
+        # Convenience aliases from ToolContext
+        self.collaborator_id = (
             self.context.config.agent.collaborator_id if self.context and self.context.config else "unknown"
         )
         self.l3_storage = self.context.storage if self.context else None
-        self.l2_storage = getattr(self, "_legacy_vector_store", None) or (
-            self.context.agent_loop.l2_storage if self.context and self.context.agent_loop else None
-        )
+        self.l2_storage = self.context.agent_loop.l2_storage if self.context and self.context.agent_loop else None
 
     @property
     def definition(self) -> dict[str, Any]:

@@ -70,7 +70,7 @@ async def test_e2e_proactive_maintenance_flow(monkeypatch, tmp_path):
     traces = await storage.get_recent_traces(agent.collaborator_id)
 
     # Check for specific trace types
-    trace_types = [t["trace_type"] for t in traces]
+    trace_types = [t.trace_type for t in traces]
     assert "message" in trace_types, "User message not archived in L3."
     assert "tool_use" in trace_types, "Tool use not archived in L3."
     assert "tool_result" in trace_types, "Tool result not archived in L3."
