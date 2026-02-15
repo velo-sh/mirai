@@ -194,19 +194,15 @@ class TestFreeProviderSourceCache:
 def _make_registry_from_data(path: Path, data: dict, **kwargs):
     """Create a ModelRegistry pre-loaded with data."""
     from mirai.agent.registry import ModelRegistry
-
-    path.write_text(json.dumps(data), encoding="utf-8")
-    registry = ModelRegistry.__new__(ModelRegistry)
-    registry._config_provider = kwargs.get("config_provider")
-    registry._config_model = kwargs.get("config_model")
-    registry._enrichment_source = None
-    registry._free_source = None
-    registry._health_status = {}
-    registry.PATH = path
     from mirai.agent.registry_models import RegistryData
 
-    registry._data = RegistryData.from_dict(data)
-    return registry
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return ModelRegistry.for_testing(
+        path=path,
+        config_provider=kwargs.get("config_provider"),
+        config_model=kwargs.get("config_model"),
+        data=RegistryData.from_dict(data),
+    )
 
 
 class TestRegistryFreeProviderIntegration:

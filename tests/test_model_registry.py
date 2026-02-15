@@ -65,36 +65,31 @@ def _make_registry(path: Path, **kwargs):
     """Create a ModelRegistry with a custom path."""
     from mirai.agent.registry import ModelRegistry
 
-    registry = ModelRegistry.__new__(ModelRegistry)
-    registry.PATH = path  # Override class var on instance
-    registry._config_provider = kwargs.get("config_provider")
-    registry._config_model = kwargs.get("config_model")
-    registry._enrichment_source = None
-    registry._free_source = None
-    registry._health_status = {}
-    # Manually assign PATH before _load so _load reads from correct path
+    # Temporarily set class-level PATH so _load reads the correct file
+    original_path = ModelRegistry.PATH
     ModelRegistry.PATH = path
-    registry._data = registry._load()
-    ModelRegistry.PATH = Path.home() / ".mirai" / "model_registry.json"  # restore
+    try:
+        registry = ModelRegistry(
+            config_provider=kwargs.get("config_provider"),
+            config_model=kwargs.get("config_model"),
+        )
+    finally:
+        ModelRegistry.PATH = original_path
     return registry
 
 
 def _make_registry_from_data(path: Path, data: dict, **kwargs):
     """Create a ModelRegistry pre-loaded with data."""
     from mirai.agent.registry import ModelRegistry
-
-    path.write_text(json.dumps(data), encoding="utf-8")
-    registry = ModelRegistry.__new__(ModelRegistry)
-    registry._config_provider = kwargs.get("config_provider")
-    registry._config_model = kwargs.get("config_model")
-    registry._enrichment_source = None
-    registry._free_source = None
-    registry._health_status = {}
-    registry.PATH = path
     from mirai.agent.registry_models import RegistryData
 
-    registry._data = RegistryData.from_dict(data)
-    return registry
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return ModelRegistry.for_testing(
+        path=path,
+        config_provider=kwargs.get("config_provider"),
+        config_model=kwargs.get("config_model"),
+        data=RegistryData.from_dict(data),
+    )
 
 
 # ===========================================================================

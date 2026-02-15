@@ -26,7 +26,7 @@ from mirai.agent.models_dev import (
     ExternalModelData,
     ModelsDevSource,
 )
-from mirai.agent.registry_models import RegistryModelEntry
+from mirai.agent.registry_models import RegistryData, RegistryModelEntry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -925,17 +925,12 @@ class TestRegistryIntegration:
         from mirai.agent.providers.base import ModelInfo
         from mirai.agent.registry import ModelRegistry
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = tmp_path / "reg.json"
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-
-        from mirai.agent.registry_models import RegistryData
-
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
 
         # Set up enrichment source
         cache_path = tmp_path / "cache.json"
@@ -976,18 +971,12 @@ class TestRegistryIntegration:
         from mirai.agent.providers.base import ModelInfo
         from mirai.agent.registry import ModelRegistry
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = tmp_path / "reg.json"
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-
-        from mirai.agent.registry_models import RegistryData
-
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._enrichment_source = None
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
 
         mock_model = ModelInfo(
             id="minimax-m2.5",
@@ -1017,17 +1006,12 @@ class TestRegistryIntegration:
         from mirai.agent.providers.base import ModelInfo
         from mirai.agent.registry import ModelRegistry
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = tmp_path / "reg.json"
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-
-        from mirai.agent.registry_models import RegistryData
-
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
         mock_source = MagicMock()
         mock_source.fetch = AsyncMock(side_effect=RuntimeError("network down"))
         reg._enrichment_source = mock_source
@@ -1062,13 +1046,12 @@ class TestRegistryIntegration:
         from mirai.agent.registry import ModelRegistry
         from mirai.agent.registry_models import RegistryData
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
         mock_source = MagicMock()
 
         async def _hang_forever() -> dict:
@@ -1123,13 +1106,12 @@ class TestRegistryIntegration:
         from mirai.agent.registry import ModelRegistry
         from mirai.agent.registry_models import RegistryData
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
 
         # Track events to prove concurrency
         events: list[str] = []
@@ -1187,14 +1169,12 @@ class TestRegistryIntegration:
         from mirai.agent.registry import ModelRegistry
         from mirai.agent.registry_models import RegistryData
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._config_provider = "minimax"
-        reg._config_model = "minimax-m2.5"
-        reg._data = RegistryData(active_provider="minimax", active_model="minimax-m2.5")
-        reg.PATH = tmp_path / "reg.json"
-        reg._enrichment_source = None
-        reg._free_source = None
-        reg._health_status = {}
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "reg.json",
+            config_provider="minimax",
+            config_model="minimax-m2.5",
+            data=RegistryData(active_provider="minimax", active_model="minimax-m2.5"),
+        )
 
         mock_model = ModelInfo(id="minimax-m2.5", name="MiniMax M2.5")
 
