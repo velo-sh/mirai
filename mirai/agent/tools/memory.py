@@ -1,6 +1,12 @@
 from typing import Any
 
+from ulid import ULID
+
+from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.tools.base import BaseTool
+from mirai.db.duck import DuckDBStorage
+from mirai.db.models import DBTrace
+from mirai.memory.vector_db import MemoryEntry, VectorStore
 
 
 class MemorizeTool(BaseTool):
@@ -34,11 +40,6 @@ class MemorizeTool(BaseTool):
         }
 
     async def execute(self, content: str, importance: float) -> str:  # type: ignore[override]
-        from ulid import ULID
-
-        from mirai.db.duck import DuckDBStorage
-        from mirai.db.models import DBTrace
-
         l3 = self.l3_storage or DuckDBStorage()
         trace = DBTrace(
             id=str(ULID()),
@@ -52,8 +53,6 @@ class MemorizeTool(BaseTool):
         trace_id = trace.id
 
         # 2. Index in L2 (RAM - Vector Store)
-        from mirai.agent.providers import MockEmbeddingProvider
-        from mirai.memory.vector_db import MemoryEntry, VectorStore
 
         embedder = MockEmbeddingProvider()
         vector = await embedder.get_embeddings(content)

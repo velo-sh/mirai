@@ -20,6 +20,7 @@ import os
 import random
 import shutil
 import time
+import zoneinfo
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,9 +46,9 @@ EMPTY_STORE: dict[str, Any] = {"version": 1, "jobs": []}
 
 # Exponential backoff for consecutive errors (indexed by error count - 1)
 ERROR_BACKOFF_MS = [
-    30_000,       # 1st error  →  30 s
-    60_000,       # 2nd error  →   1 min
-    5 * 60_000,   # 3rd error  →   5 min
+    30_000,  # 1st error  →  30 s
+    60_000,  # 2nd error  →   1 min
+    5 * 60_000,  # 3rd error  →   5 min
     15 * 60_000,  # 4th error  →  15 min
     60 * 60_000,  # 5th+ error →  60 min
 ]
@@ -101,8 +102,6 @@ def compute_next_run(schedule: dict[str, Any], after_ms: int | None = None) -> i
         tz = None
         if tz_name:
             try:
-                import zoneinfo
-
                 tz = zoneinfo.ZoneInfo(tz_name)
             except Exception:
                 pass  # fallback to UTC

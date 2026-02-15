@@ -7,8 +7,9 @@ execution cycle.
 import functools
 import os
 import shutil
-from typing import Any
 
+from mirai.collaborator.manager import CollaboratorManager
+from mirai.db.session import get_session
 from mirai.logging import get_logger
 
 log = get_logger("mirai.agent.identity")
@@ -30,8 +31,6 @@ async def initialize_collaborator(collaborator_id: str) -> tuple[str, str, str]:
     Returns:
         (name, role, system_prompt) tuple.
     """
-    from mirai.collaborator.manager import CollaboratorManager
-    from mirai.db.session import get_session
 
     async for session in get_session():
         manager = CollaboratorManager(session)

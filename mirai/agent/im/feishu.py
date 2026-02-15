@@ -1,5 +1,6 @@
 from typing import Any
 
+import httpx
 import lark_oapi as lark
 import orjson
 from lark_oapi.api.im.v1 import *  # noqa: F403  # type: ignore[import-untyped,attr-defined]
@@ -216,7 +217,6 @@ class FeishuProvider(BaseIMProvider):
 
     async def _send_via_webhook(self, msg_type: str, content: Any) -> bool:
         """POST to a Feishu custom bot webhook."""
-        import httpx
 
         if self._webhook_http is None:
             self._webhook_http = httpx.AsyncClient(timeout=10.0, http2=True)

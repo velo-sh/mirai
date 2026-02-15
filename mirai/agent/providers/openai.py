@@ -24,6 +24,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from mirai.agent.free_providers import FREE_PROVIDER_SPECS
 from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 from mirai.errors import ProviderError
@@ -127,8 +128,6 @@ class OpenAIProvider:
 
     def _raise_daily_limit_error(self) -> None:
         """Raise a clear ProviderError when daily limit is hit."""
-        from mirai.agent.free_providers import FREE_PROVIDER_SPECS
-
         signup = ""
         for spec in FREE_PROVIDER_SPECS:
             if spec.name == self._provider_name:

@@ -5,6 +5,7 @@ Uses structlog with orjson serialization for high-performance JSON output
 in production, and colored console output for development.
 """
 
+import logging
 import sys
 from typing import Any
 
@@ -25,8 +26,6 @@ def setup_logging(*, json_output: bool = False, level: str = "INFO") -> None:
                      If False, emit colored console output (for development).
         level: Minimum log level (DEBUG, INFO, WARNING, ERROR).
     """
-    import logging
-
     # Set stdlib root logger level
     logging.basicConfig(
         format="%(message)s",

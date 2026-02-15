@@ -2,6 +2,7 @@ import os
 from typing import Any
 
 import lancedb
+import orjson
 import pyarrow as pa
 from pydantic import BaseModel
 
@@ -40,8 +41,6 @@ class VectorStore:
             return
 
         dim = len(entries[0].vector)
-        import orjson
-
         data = [
             {
                 "vector": entry.vector,
@@ -68,7 +67,7 @@ class VectorStore:
             table = self.db.open_table(self.table_name)
         except Exception:
             return []
-        
+
         # print(f"DEBUG: Search rows: {table.count_rows()}. Filter: {filter}")
         # ...
 
