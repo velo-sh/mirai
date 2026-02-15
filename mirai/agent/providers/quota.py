@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Any
 
+from mirai.auth.antigravity_auth import fetch_usage
 from mirai.logging import get_logger
 
 log = get_logger("mirai.providers.quota")
@@ -41,8 +42,6 @@ class QuotaManager:
             # Double check inside lock
             if time.time() - self._last_update < self.CACHE_TTL:
                 return
-
-            from mirai.auth.antigravity_auth import fetch_usage
 
             try:
                 log.debug("refreshing_quotas")
