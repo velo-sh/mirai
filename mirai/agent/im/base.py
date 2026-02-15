@@ -6,7 +6,7 @@ class BaseIMProvider(ABC):
     """Abstract interface for IM notification providers."""
 
     @abstractmethod
-    async def send_message(self, content: str, chat_id: str | None = None) -> bool:
+    async def send_message(self, content: str, chat_id: str | None = None, prefer_p2p: bool = False) -> bool:
         """Send a message to a specific chat or default channel."""
         ...
 
@@ -18,4 +18,3 @@ class BaseIMProvider(ABC):
     async def send_markdown(self, content: str, title: str = "Mira", chat_id: str | None = None) -> bool:
         """Send a markdown-rendered message. Falls back to plain text."""
         return await self.send_message(content, chat_id=chat_id)
-

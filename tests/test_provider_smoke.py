@@ -25,6 +25,7 @@ from mirai.agent.providers.base import ModelInfo, UsageSnapshot
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _skip_unless_key(env_var: str) -> str:
     """Return the key or skip the test if the env var is unset."""
     key = os.environ.get(env_var, "")
@@ -37,6 +38,7 @@ def _skip_unless_key(env_var: str) -> str:
 # MiniMax smoke tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.smoke
 class TestMiniMaxSmoke:
     """Live smoke tests for MiniMax provider."""
@@ -47,6 +49,7 @@ class TestMiniMaxSmoke:
 
     def _make_provider(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         return MiniMaxProvider(api_key=self.api_key)
 
     # --- list_models ---
@@ -102,6 +105,7 @@ class TestMiniMaxSmoke:
 
         # Should have at least one text block
         from mirai.agent.models import TextBlock
+
         text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
         assert len(text_blocks) >= 1
         assert len(text_blocks[0].text.strip()) > 0
@@ -142,6 +146,7 @@ class TestMiniMaxSmoke:
 
         # The model should either call the tool or respond with text
         from mirai.agent.models import ToolUseBlock
+
         tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
         if tool_blocks:
             assert tool_blocks[0].name == "get_weather"
@@ -164,6 +169,7 @@ class TestMiniMaxSmoke:
 # Anthropic smoke tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.smoke
 class TestAnthropicSmoke:
     """Live smoke tests for Anthropic provider."""
@@ -174,6 +180,7 @@ class TestAnthropicSmoke:
 
     def _make_provider(self):
         from mirai.agent.providers.anthropic import AnthropicProvider
+
         return AnthropicProvider(api_key=self.api_key)
 
     @pytest.mark.asyncio

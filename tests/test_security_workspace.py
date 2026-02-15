@@ -1,6 +1,9 @@
 import asyncio
+
 import pytest
+
 from mirai.agent.tools.workspace import WorkspaceTool
+
 
 @pytest.mark.asyncio
 async def test_workspace_security_path_traversal():
@@ -25,6 +28,7 @@ async def test_workspace_security_path_traversal():
     assert "outside the allowed workspace" in str(excinfo.value)
 
     print("\n[QA] Workspace Security Test Passed: Path traversal blocked.")
+
 
 if __name__ == "__main__":
     asyncio.run(test_workspace_security_path_traversal())

@@ -71,9 +71,7 @@ class AgentDreamer(BaseBackgroundService):
             # Clean up potential markdown formatting if the model included backticks
             if new_soul.startswith("```"):
                 lines = new_soul.splitlines()
-                if lines[0].startswith("```markdown"):
-                    new_soul = "\n".join(lines[1:-1])
-                elif lines[0].startswith("```"):
+                if lines[0].startswith("```markdown") or lines[0].startswith("```"):
                     new_soul = "\n".join(lines[1:-1])
 
             if len(new_soul) < 100:

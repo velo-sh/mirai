@@ -176,9 +176,7 @@ class TestConvertMessages:
 
     def test_tool_result_message(self):
         """OpenAI role=tool → Gemini functionResponse."""
-        messages = [
-            {"role": "tool", "tool_call_id": "call_1", "content": "result_text"}
-        ]
+        messages = [{"role": "tool", "tool_call_id": "call_1", "content": "result_text"}]
         result = AntigravityProvider._convert_messages(messages)
         fr = result[0]["parts"][0]["functionResponse"]
         assert fr["name"] == "call_1"

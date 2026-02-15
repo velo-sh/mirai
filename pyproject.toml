@@ -50,10 +50,23 @@ select = [
     "I",    # isort
     "B",    # flake8-bugbear
     "UP",   # pyupgrade
+    "TRY",  # tryceratops (exception handling)
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
 ]
 ignore = [
-    "E501",   # line too long (handled by formatter)
-    "B008",   # do not perform function calls in argument defaults
+    "E501",    # line too long (handled by formatter)
+    "B008",    # do not perform function calls in argument defaults
+    "TRY003",  # long messages in raise (acceptable for domain errors)
+    "TRY300",  # try-consider-else (noisy — return-in-try is idiomatic)
+    "TRY301",  # raise-within-try (noisy — validation raises are fine)
+    "TRY400",  # logging.error vs logging.exception (structlog compat)
+    "SIM108",  # if-else-ternary (harms readability for complex expressions)
+    "SIM105",  # contextlib.suppress (harms readability in async/cleanup code)
+    "SIM114",  # if-with-same-arms (intentional for clarity)
+    "SIM117",  # nested-with (more readable with complex mock contexts)
+    "SIM102",  # collapsible-if (separate guards are more readable)
+    "RET504",  # unnecessary-assign (named returns aid debugging)
 ]
 
 [tool.ruff.lint.isort]
@@ -71,6 +84,9 @@ no_implicit_optional = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+markers = [
+    "smoke: lightweight tests suitable for CI fast-feedback",
+]
 
 [tool.pyre]
 search_path = [

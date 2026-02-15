@@ -13,12 +13,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-py_pytest = None
-try:
-    import pytest
-except ImportError:
-    pass
-
+import pytest
 from pydantic import BaseModel
 
 from mirai.agent.agent_loop import AgentLoop, LoopState

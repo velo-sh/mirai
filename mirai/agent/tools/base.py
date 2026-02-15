@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mirai.agent.agent_loop import AgentLoop
+    from mirai.agent.im.base import BaseIMProvider
     from mirai.agent.providers.base import ProviderProtocol
     from mirai.agent.registry import ModelRegistry
     from mirai.config import MiraiConfig
@@ -24,7 +25,7 @@ class ToolContext:
     provider: ProviderProtocol | None = None
     storage: DuckDBStorage | None = None
     cron_scheduler: CronScheduler | None = None
-    im_provider: Any = None
+    im_provider: BaseIMProvider | None = None
     start_time: float = field(default_factory=time.monotonic)
 
 

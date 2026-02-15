@@ -70,6 +70,7 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
+    log_format: str = "console"  # "console" or "json"
 
 
 class DatabaseConfig(BaseModel):

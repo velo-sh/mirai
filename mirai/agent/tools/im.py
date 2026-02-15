@@ -54,9 +54,8 @@ class IMTool(BaseTool):
             if sent:
                 log.info("im_tool_message_sent", length=len(message))
                 return "Message sent successfully."
-            else:
-                log.warning("im_tool_send_returned_false")
-                return "Failed to send message. No available chat found."
+            log.warning("im_tool_send_returned_false")
+            return "Failed to send message. No available chat found."
         except Exception as exc:
             log.error("im_tool_send_error", error=str(exc))
             return f"Error sending message: {exc}"
