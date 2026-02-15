@@ -28,12 +28,9 @@ _http = httpx.AsyncClient(timeout=30.0, http2=True)
 if TYPE_CHECKING:
     from mirai.config import AuthConfig
 
-# OAuth constants (from openclaw's google-antigravity-auth extension)
-CLIENT_ID = "***REDACTED_CLIENT_ID***"
-CLIENT_SECRET = "***REDACTED_SECRET***"
-REDIRECT_URI = "http://localhost:51121/oauth-callback"
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
+# Note: OAuth CLIENT_ID and CLIENT_SECRET are loaded from AuthConfig
+# (via MIRAI_AUTH__CLIENT_ID / MIRAI_AUTH__CLIENT_SECRET env vars or config.toml).
+# They must NEVER be hardcoded in source code.
 
 
 def _get_auth_config() -> "AuthConfig":
@@ -90,7 +87,7 @@ def _build_auth_url(challenge: str, state: str, auth_config: "AuthConfig | None"
     """Build the Google OAuth authorization URL."""
     cfg = auth_config or _get_auth_config()
     params = {
-        "client_id": CLIENT_ID,
+        "client_id": cfg.client_id,
         "response_type": "code",
         "redirect_uri": cfg.redirect_uri,
         "scope": " ".join(SCOPES),
@@ -136,8 +133,8 @@ async def exchange_code(code: str, verifier: str, auth_config: "AuthConfig | Non
     response = await _http.post(
         cfg.token_url,
         data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": cfg.client_id,
+            "client_secret": cfg.client_secret,
             "code": code,
             "grant_type": "authorization_code",
             "redirect_uri": cfg.redirect_uri,
@@ -166,8 +163,8 @@ async def refresh_access_token(refresh_token: str, auth_config: "AuthConfig | No
     response = await _http.post(
         cfg.token_url,
         data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": cfg.client_id,
+            "client_secret": cfg.client_secret,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         },

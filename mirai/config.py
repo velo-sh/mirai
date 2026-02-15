@@ -112,10 +112,17 @@ class TracingConfig(BaseModel):
 class AuthConfig(BaseModel):
     """OAuth / authentication endpoint configuration.
 
-    Centralizes Google Antigravity OAuth URLs so they can be overridden
-    via config.toml or environment variables instead of being hardcoded.
+    Centralizes Google Antigravity OAuth credentials and URLs so they
+    can be provided via config.toml or environment variables instead
+    of being hardcoded in source code.
+
+    Required environment variables (or config.toml fields):
+      MIRAI_AUTH__CLIENT_ID
+      MIRAI_AUTH__CLIENT_SECRET
     """
 
+    client_id: str = ""
+    client_secret: str = ""
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
     redirect_uri: str = "http://localhost:51121/oauth-callback"
