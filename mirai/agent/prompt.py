@@ -4,6 +4,8 @@ Extracted from loop.py to separate prompt composition from the core
 execution cycle.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import orjson
@@ -12,6 +14,29 @@ from mirai.agent.providers.base import ProviderProtocol
 from mirai.logging import get_logger
 
 log = get_logger("mirai.agent.prompt")
+
+
+def _build_tools_section(tools: dict[str, Any]) -> str:
+    """Build the '## Available Tools' section by reading each tool's own definition.
+
+    Each tool carries a ``definition`` property with a ``description`` field.
+    We simply echo that description — no hardcoded summaries needed.
+    """
+    if not tools:
+        return ""
+
+    lines = ["## Available Tools", "You have the following tools:"]
+    for name, tool in tools.items():
+        desc = ""
+        if hasattr(tool, "definition"):
+            defn = tool.definition
+            if isinstance(defn, dict):
+                desc = defn.get("description", "")
+        if desc:
+            lines.append(f"- **{name}**: {desc}")
+        else:
+            lines.append(f"- **{name}**")
+    return "\n".join(lines)
 
 
 async def build_system_prompt(
@@ -24,11 +49,12 @@ async def build_system_prompt(
     l2_storage: Any,
     l3_storage: Any,
     msg_text: str,
+    tools: dict[str, Any] | None = None,
 ) -> str:
     """Construct the enriched system prompt with identity, memories, and runtime info.
 
     Follows the sandwich pattern:
-        identity → context → memories → runtime → reinforcement → rules
+        identity → context → tools → memories → runtime → reinforcement → rules
     """
     # Memory recall (L2 → L3)
     query_vector = await embedder.get_embeddings(msg_text)
@@ -52,8 +78,13 @@ async def build_system_prompt(
     current_model = getattr(provider, "model", "unknown")
     runtime_info = f"Provider: {provider_name} | Model: {current_model}"
 
-    # Sandwich pattern: identity → context → memories → runtime → reinforcement → rules
+    # Tools section (dynamic — reads descriptions from each tool's definition)
+    tools_section = _build_tools_section(tools or {})
+
+    # Sandwich pattern: identity → context → tools → memories → runtime → reinforcement → rules
     prompt = f"# IDENTITY\n{soul_content}\n\n# CONTEXT\n{base_system_prompt}"
+    if tools_section:
+        prompt += "\n\n" + tools_section
     if memory_context:
         prompt += "\n\n" + memory_context + "\nUse the above memories if they are relevant to the current request."
     prompt += f"\n\n# RUNTIME INFO\n{runtime_info}"
@@ -67,3 +98,5 @@ async def build_system_prompt(
         "If you want to call a tool, emit a functionCall; do NOT describe the call in prose."
     )
     return prompt
+
+
