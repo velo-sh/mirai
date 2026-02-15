@@ -38,7 +38,7 @@ class WorkspaceTool(BaseTool):
                 raise ValueError(f"Security Error: Path {path} is outside the allowed workspace.")
 
             safe_path = target_path
-        except Exception as e:
+        except (ValueError, OSError) as e:
             if "Security Error" in str(e):
                 raise
             raise ValueError(f"Security Error: Invalid path provided: {path}") from e
@@ -59,7 +59,7 @@ class WorkspaceTool(BaseTool):
                 with open(safe_path) as f:
                     content = f.read()
                 return f"--- Content of {safe_path} ---\n{content}"
-            except Exception as e:
+            except OSError as e:
                 return f"Error reading file: {e}"
 
         return "Error: Unknown action."

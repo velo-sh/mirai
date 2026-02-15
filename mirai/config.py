@@ -102,6 +102,13 @@ class DreamerConfig(BaseModel):
     interval: int = 3600  # seconds between dream cycles
 
 
+class TracingConfig(BaseModel):
+    """OpenTelemetry tracing configuration."""
+
+    console: bool = False
+    otlp_endpoint: str | None = None
+
+
 class TomlSource(PydanticBaseSettingsSource):
     """Custom settings source to load from TOML file using standard lib (py3.11+)."""
 
@@ -125,7 +132,7 @@ class TomlSource(PydanticBaseSettingsSource):
 
                 with open(path, "rb") as f:
                     return tomllib.load(f)
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return {}
 
@@ -156,6 +163,7 @@ class MiraiConfig(BaseSettings):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     registry: RegistryConfig = Field(default_factory=RegistryConfig)
     dreamer: DreamerConfig = Field(default_factory=DreamerConfig)
+    tracing: TracingConfig = Field(default_factory=TracingConfig)
 
     @classmethod
     def settings_customise_sources(

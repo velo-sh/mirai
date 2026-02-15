@@ -6,12 +6,17 @@ execution cycle.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 import orjson
 
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.agent.tools.base import BaseTool
+
+if TYPE_CHECKING:
+    from mirai.agent.providers.embeddings import EmbedderProtocol
+    from mirai.db.duck import DuckDBStorage
+    from mirai.memory.vector_db import VectorStore
 
 
 def _build_tools_section(tools: dict[str, BaseTool]) -> str:
@@ -39,11 +44,11 @@ async def build_system_prompt(
     soul_content: str,
     base_system_prompt: str,
     provider: ProviderProtocol,
-    embedder: Any,
-    l2_storage: Any,
-    l3_storage: Any,
+    embedder: EmbedderProtocol,
+    l2_storage: VectorStore,
+    l3_storage: DuckDBStorage,
     msg_text: str,
-    tools: dict[str, Any] | None = None,
+    tools: dict[str, BaseTool] | None = None,
 ) -> str:
     """Construct the enriched system prompt with identity, memories, and runtime info.
 

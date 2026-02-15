@@ -31,6 +31,7 @@ dependencies = [
     "json5>=0.9",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-fastapi>=0.60b1",
 ]
 
 [dependency-groups]
@@ -89,6 +90,23 @@ testpaths = ["tests"]
 asyncio_mode = "strict"
 markers = [
     "smoke: lightweight tests suitable for CI fast-feedback",
+]
+addopts = "--cov=mirai --cov-report=term-missing --cov-report=html:htmlcov"
+
+[tool.coverage.run]
+source = ["mirai"]
+omit = [
+    "mirai/__pycache__/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "@abstractmethod",
 ]
 
 [tool.pyre]

@@ -2,7 +2,7 @@
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -102,8 +102,10 @@ class TestSystemToolEdgeCases:
 
 
 def _make_fake_provider(credentials: dict | None = None) -> MagicMock:
-    """Create a mock provider with fake credentials."""
-    provider = MagicMock()
+    """Create a mock provider that passes isinstance(_, AntigravityProvider)."""
+    from mirai.agent.providers.antigravity import AntigravityProvider
+
+    provider = MagicMock(spec=AntigravityProvider)
     provider.credentials = credentials or {
         "access": "fake-token-123",
         "refresh": "fake-refresh",
@@ -111,6 +113,7 @@ def _make_fake_provider(credentials: dict | None = None) -> MagicMock:
         "project_id": "test-project",
         "email": "test@example.com",
     }
+    provider._ensure_fresh_token = AsyncMock()
     return provider
 
 

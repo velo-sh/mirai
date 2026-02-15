@@ -1,13 +1,13 @@
 """Mirai application bootstrap — encapsulates subsystem initialization and shutdown."""
 
 import asyncio
-import os
 import signal
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from mirai.agent.im.base import BaseIMProvider
     from mirai.agent.tools.base import ToolContext
 
 from mirai import integrations
@@ -85,7 +85,7 @@ class MiraiApp:
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
         self._tasks: set[asyncio.Task[None]] = set()
-        self._im_provider: Any = None
+        self._im_provider: BaseIMProvider | None = None
         self._tool_context: ToolContext | None = None
 
     # ------------------------------------------------------------------
@@ -174,8 +174,7 @@ class MiraiApp:
             port=config.server.port,
         )
 
-        console_traces = os.getenv("OTEL_TRACES_CONSOLE", "").lower() in ("1", "true")
-        setup_tracing(service_name="mirai", console=console_traces)
+        setup_tracing(service_name="mirai", console=config.tracing.console)
 
     # ------------------------------------------------------------------
     # Phase 2: Storage
