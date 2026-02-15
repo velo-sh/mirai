@@ -16,7 +16,7 @@ from base64 import urlsafe_b64encode
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -25,12 +25,28 @@ import orjson
 # Shared HTTP client for connection pooling + HTTP/2
 _http = httpx.AsyncClient(timeout=30.0, http2=True)
 
+if TYPE_CHECKING:
+    from mirai.config import AuthConfig
+
 # OAuth constants (from openclaw's google-antigravity-auth extension)
 CLIENT_ID = "***REDACTED_CLIENT_ID***"
 CLIENT_SECRET = "***REDACTED_SECRET***"
 REDIRECT_URI = "http://localhost:51121/oauth-callback"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+def _get_auth_config() -> "AuthConfig":
+    """Lazily load AuthConfig from MiraiConfig, falling back to defaults."""
+    try:
+        from mirai.config import MiraiConfig
+
+        return MiraiConfig.load().auth
+    except Exception:
+        from mirai.config import AuthConfig
+
+        return AuthConfig()
+
 
 DEFAULT_PROJECT_ID = "rising-fact-p41fc"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250514"
@@ -70,12 +86,13 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _build_auth_url(challenge: str, state: str) -> str:
+def _build_auth_url(challenge: str, state: str, auth_config: "AuthConfig | None" = None) -> str:
     """Build the Google OAuth authorization URL."""
+    cfg = auth_config or _get_auth_config()
     params = {
         "client_id": CLIENT_ID,
         "response_type": "code",
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": cfg.redirect_uri,
         "scope": " ".join(SCOPES),
         "code_challenge": challenge,
         "code_challenge_method": "S256",
@@ -83,7 +100,7 @@ def _build_auth_url(challenge: str, state: str) -> str:
         "access_type": "offline",
         "prompt": "consent",
     }
-    return f"{AUTH_URL}?{urlencode(params)}"
+    return f"{cfg.auth_url}?{urlencode(params)}"
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -113,16 +130,17 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         pass  # Suppress server logs
 
 
-async def exchange_code(code: str, verifier: str) -> dict:
+async def exchange_code(code: str, verifier: str, auth_config: "AuthConfig | None" = None) -> dict:
     """Exchange authorization code for access + refresh tokens."""
+    cfg = auth_config or _get_auth_config()
     response = await _http.post(
-        TOKEN_URL,
+        cfg.token_url,
         data={
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
             "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": cfg.redirect_uri,
             "code_verifier": verifier,
         },
     )
@@ -142,10 +160,11 @@ async def exchange_code(code: str, verifier: str) -> dict:
     return {"access": access, "refresh": refresh, "expires": expires}
 
 
-async def refresh_access_token(refresh_token: str) -> dict:
+async def refresh_access_token(refresh_token: str, auth_config: "AuthConfig | None" = None) -> dict:
     """Refresh an expired access token using the refresh token."""
+    cfg = auth_config or _get_auth_config()
     response = await _http.post(
-        TOKEN_URL,
+        cfg.token_url,
         data={
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
@@ -166,8 +185,9 @@ async def refresh_access_token(refresh_token: str) -> dict:
     return {"access": access, "expires": expires}
 
 
-async def fetch_project_id(access_token: str) -> str:
+async def fetch_project_id(access_token: str, auth_config: "AuthConfig | None" = None) -> str:
     """Fetch the Cloud AI Companion project ID."""
+    cfg = auth_config or _get_auth_config()
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
@@ -192,7 +212,7 @@ async def fetch_project_id(access_token: str) -> str:
         }
     )
 
-    for endpoint in CODE_ASSIST_ENDPOINTS:
+    for endpoint in cfg.code_assist_endpoints:
         try:
             response = await _http.post(
                 f"{endpoint}/v1internal:loadCodeAssist",

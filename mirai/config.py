@@ -109,6 +109,24 @@ class TracingConfig(BaseModel):
     otlp_endpoint: str | None = None
 
 
+class AuthConfig(BaseModel):
+    """OAuth / authentication endpoint configuration.
+
+    Centralizes Google Antigravity OAuth URLs so they can be overridden
+    via config.toml or environment variables instead of being hardcoded.
+    """
+
+    auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    token_url: str = "https://oauth2.googleapis.com/token"
+    redirect_uri: str = "http://localhost:51121/oauth-callback"
+    code_assist_endpoints: list[str] = Field(
+        default_factory=lambda: [
+            "https://cloudcode-pa.googleapis.com",
+            "https://daily-cloudcode-pa.sandbox.googleapis.com",
+        ],
+    )
+
+
 class TomlSource(PydanticBaseSettingsSource):
     """Custom settings source to load from TOML file using standard lib (py3.11+)."""
 
@@ -164,6 +182,7 @@ class MiraiConfig(BaseSettings):
     registry: RegistryConfig = Field(default_factory=RegistryConfig)
     dreamer: DreamerConfig = Field(default_factory=DreamerConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
 
     @classmethod
     def settings_customise_sources(
