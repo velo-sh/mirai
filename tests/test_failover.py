@@ -19,12 +19,14 @@ async def test_antigravity_provider_failover():
         "models": [
             {"id": "claude-sonnet-4-5", "used_pct": 100.0, "reset_time": "1h"},
             {"id": "claude-opus-4-5-thinking", "used_pct": 100.0, "reset_time": "1h"},
+            {"id": "claude-opus-4-6-thinking", "used_pct": 100.0, "reset_time": "1h"},
+            {"id": "claude-sonnet-4-5-thinking", "used_pct": 100.0, "reset_time": "1h"},
             {"id": "gemini-3-pro-high", "used_pct": 0.0, "reset_time": None},
             {"id": "gemini-3-flash", "used_pct": 0.0, "reset_time": None},
         ]
     }
 
-    with patch("mirai.auth.antigravity_auth.fetch_usage", AsyncMock(return_value=mock_usage)):
+    with patch("mirai.agent.providers.quota.fetch_usage", AsyncMock(return_value=mock_usage)):
         # Mock the HTTP post call
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -32,7 +34,8 @@ async def test_antigravity_provider_failover():
 
         provider._http.post = AsyncMock(return_value=mock_response)
 
-        # This should trigger failover from claude-sonnet-4-20250514 -> claude-sonnet-4-5 (100%) -> claude-opus-4-6-thinking (mocked to succeed)
+        # This should trigger failover from claude-sonnet-4-20250514 -> claude-sonnet-4-5 (100%)
+        # -> all Claude models exhausted -> gemini-3-pro-high (0%)
         # Note: MODEL_MAP maps "claude-sonnet-4-20250514" to "claude-sonnet-4-5"
         resp = await provider.generate_response(
             model="claude-sonnet-4-20250514", system="sys", messages=[{"role": "user", "content": "hi"}], tools=[]
@@ -40,14 +43,14 @@ async def test_antigravity_provider_failover():
 
         # Verify result
         assert resp.text() == "Hello from fallback"
-        assert resp.model_id == "claude-opus-4-6-thinking"
+        assert resp.model_id == "gemini-3-pro-high"
 
         # Verify the correct model was sent in the request
         call_args = provider._http.post.call_args
         import orjson
 
         body = orjson.loads(call_args[1]["content"])
-        assert body["model"] == "claude-opus-4-6-thinking"
+        assert body["model"] == "gemini-3-pro-high"
 
 
 @pytest.mark.asyncio
@@ -65,7 +68,7 @@ async def test_antigravity_provider_no_failover_when_available():
         ]
     }
 
-    with patch("mirai.auth.antigravity_auth.fetch_usage", AsyncMock(return_value=mock_usage)):
+    with patch("mirai.agent.providers.quota.fetch_usage", AsyncMock(return_value=mock_usage)):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = 'data: {"response": {"candidates": [{"content": {"parts": [{"text": "Hello"}]}, "finishReason": "STOP"}]}}\n'
