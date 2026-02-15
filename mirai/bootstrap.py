@@ -164,7 +164,7 @@ class MiraiApp:
         self.config = MiraiConfig.load()
         config = self.config
 
-        json_output = os.getenv("MIRAI_LOG_FORMAT", "console") == "json"
+        json_output = config.server.log_format == "json"
         setup_logging(json_output=json_output, level=config.server.log_level)
 
         log.info(

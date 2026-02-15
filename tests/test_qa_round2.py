@@ -308,9 +308,8 @@ class TestGracefulShutdown:
 
         tool = SystemTool(config=MiraiConfig(), agent_loop=mock_loop)
 
-        with patch("os.killpg"):
-            with patch("subprocess.Popen"):
-                result = await tool.execute(action="restart")
+        with patch("os.killpg"), patch("subprocess.Popen"):
+            result = await tool.execute(action="restart")
 
         assert "Restart scheduled" in result
 
@@ -324,9 +323,8 @@ class TestGracefulShutdown:
 
         tool = SystemTool(config=MiraiConfig())
 
-        with patch("os.killpg"):
-            with patch("subprocess.Popen"):
-                result = await tool.execute(action="restart")
+        with patch("os.killpg"), patch("subprocess.Popen"):
+            result = await tool.execute(action="restart")
 
         assert "Restart scheduled" in result
 
@@ -342,9 +340,8 @@ class TestGracefulShutdown:
 
         tool = SystemTool(config=MiraiConfig(), agent_loop=mock_loop)
 
-        with patch("os.killpg"):
-            with patch("subprocess.Popen"):
-                result = await tool.execute(action="restart")
+        with patch("os.killpg"), patch("subprocess.Popen"):
+            result = await tool.execute(action="restart")
 
         assert "Restart scheduled" in result
 

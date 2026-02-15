@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,10 +9,10 @@ import pytest
 
 from mirai.agent.prompt import _build_tools_section, build_system_prompt
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_tool(name: str, description: str) -> MagicMock:
     """Create a mock tool with a definition property."""
@@ -27,8 +26,6 @@ def _make_tool_no_desc(name: str) -> MagicMock:
     tool = MagicMock()
     tool.definition = {"name": name}
     return tool
-
-
 
 
 def _mock_deps() -> dict[str, Any]:
@@ -61,6 +58,7 @@ def _mock_deps() -> dict[str, Any]:
 # ===========================================================================
 # _build_tools_section tests
 # ===========================================================================
+
 
 class TestBuildToolsSection:
     """Unit tests for the _build_tools_section helper."""
@@ -106,7 +104,7 @@ class TestBuildToolsSection:
         result = _build_tools_section(tools)
         lines = result.split("\n")
 
-        tool_lines = [l for l in lines if l.startswith("- **")]
+        tool_lines = [line for line in lines if line.startswith("- **")]
         assert len(tool_lines) == 3
         assert "aaa" in tool_lines[0]
         assert "zzz" in tool_lines[1]
@@ -128,6 +126,7 @@ class TestBuildToolsSection:
 # ===========================================================================
 # build_system_prompt integration tests
 # ===========================================================================
+
 
 class TestBuildSystemPromptWithTools:
     """Integration tests for tool awareness in the full system prompt."""
@@ -204,8 +203,8 @@ class TestBuildSystemPromptWithTools:
     @pytest.mark.asyncio
     async def test_real_tool_definitions(self):
         """Smoke test with actual tool classes to verify definition reading."""
-        from mirai.agent.tools.im import IMTool
         from mirai.agent.tools.echo import EchoTool
+        from mirai.agent.tools.im import IMTool
 
         im = IMTool()
         echo = EchoTool()

@@ -148,13 +148,13 @@ class TestInit:
 
     def test_default_cache_path(self) -> None:
         src = ModelsDevSource()
-        assert src.CACHE_PATH == Path.home() / ".mirai" / "models_dev_cache.json"
+        assert Path.home() / ".mirai" / "models_dev_cache.json" == src.CACHE_PATH
         assert src._data == {}
 
     def test_custom_cache_path(self, tmp_path: Path) -> None:
         custom = tmp_path / "custom_cache.json"
         src = ModelsDevSource(cache_path=custom)
-        assert src.CACHE_PATH == custom
+        assert custom == src.CACHE_PATH
 
 
 # ===========================================================================

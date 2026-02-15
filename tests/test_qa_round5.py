@@ -357,9 +357,8 @@ class TestMetricsAutoWire:
     def test_latency_timer_records_on_exception(self):
 
         m = RequestMetrics()
-        with pytest.raises(ValueError):
-            with LatencyTimer(metrics_instance=m):
-                raise ValueError("boom")
+        with pytest.raises(ValueError), LatencyTimer(metrics_instance=m):
+            raise ValueError("boom")
 
         snap = m.snapshot()
         assert snap["total_requests"] == 1

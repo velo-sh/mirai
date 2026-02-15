@@ -1,5 +1,20 @@
 """Embedding providers for Mirai's memory subsystem."""
 
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class EmbedderProtocol(Protocol):
+    """Structural type for embedding providers.
+
+    Any class implementing ``get_embeddings(text) -> list[float]``
+    satisfies this protocol.
+    """
+
+    async def get_embeddings(self, text: str) -> list[float]: ...
+
 
 class MockEmbeddingProvider:
     """Provides consistent fake embeddings.

@@ -26,6 +26,7 @@ from mirai.agent.models import ProviderResponse, TextBlock, ToolUseBlock
 from mirai.agent.prompt import build_system_prompt
 from mirai.agent.providers import MockEmbeddingProvider
 from mirai.agent.providers.base import ProviderProtocol
+from mirai.agent.providers.embeddings import EmbedderProtocol
 from mirai.agent.tools.base import BaseTool
 from mirai.db.duck import DuckDBStorage
 from mirai.db.models import DBTrace
@@ -103,7 +104,7 @@ class AgentLoop:
         base_system_prompt: str = "",
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
-        embedder: Any | None = None,
+        embedder: EmbedderProtocol | None = None,
         fallback_models: list[str] | None = None,
     ):
         self.provider = provider
@@ -138,7 +139,7 @@ class AgentLoop:
         soul_content: str = "",
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
-        embedder: Any = None,
+        embedder: EmbedderProtocol | None = None,
     ) -> AgentLoop:
         """Create an AgentLoop instance for testing without heavy I/O.
 
@@ -185,7 +186,7 @@ class AgentLoop:
         collaborator_id: str,
         l3_storage: DuckDBStorage | None = None,
         l2_storage: VectorStore | None = None,
-        embedder: Any | None = None,
+        embedder: EmbedderProtocol | None = None,
         fallback_models: list[str] | None = None,
     ) -> AgentLoop:
         """Factory method to create and initialize an AgentLoop instance."""

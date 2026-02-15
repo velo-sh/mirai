@@ -36,7 +36,7 @@ class WorkspaceTool(BaseTool):
 
             if not target_path.startswith(cwd):
                 raise ValueError(f"Security Error: Path {path} is outside the allowed workspace.")
-            
+
             safe_path = target_path
         except Exception as e:
             if "Security Error" in str(e):
@@ -51,7 +51,7 @@ class WorkspaceTool(BaseTool):
                 files.append(item)
             return f"Files in {safe_path}: " + ", ".join(files)
 
-        elif action == "read":
+        if action == "read":
             if not os.path.isfile(safe_path):
                 return f"Error: {safe_path} is not a valid file."
 

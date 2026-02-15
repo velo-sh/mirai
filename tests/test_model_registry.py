@@ -296,10 +296,9 @@ class TestRefresh:
                 cls = MagicMock()
                 cls.return_value.list_models = AsyncMock(side_effect=Exception("fail"))
                 return cls
-            else:
-                cls = MagicMock()
-                cls.return_value.list_models = AsyncMock(return_value=mock_models)
-                return cls
+            cls = MagicMock()
+            cls.return_value.list_models = AsyncMock(return_value=mock_models)
+            return cls
 
         with patch.dict(os.environ, {"MINIMAX_API_KEY": "key1", "ANTHROPIC_API_KEY": "key2", "OPENAI_API_KEY": ""}):
             with patch("mirai.agent.registry._import_provider_class", side_effect=side_effect):

@@ -112,11 +112,11 @@ def compute_next_run(schedule: dict[str, Any], after_ms: int | None = None) -> i
         next_dt: datetime = cron.get_next(datetime)
         return _dt_to_ms(next_dt)
 
-    elif kind == "every":
+    if kind == "every":
         interval_ms: int = int(schedule.get("everyMs", 60000))
         return after_ms + interval_ms
 
-    elif kind == "at":
+    if kind == "at":
         at_str = schedule["at"]
         at_dt = datetime.fromisoformat(at_str)
         at_ms = _dt_to_ms(at_dt)

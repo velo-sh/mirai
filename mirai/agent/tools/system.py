@@ -195,31 +195,30 @@ class SystemTool(BaseTool):
     ) -> str:
         if action == "status":
             return await self._status()
-        elif action == "usage":
+        if action == "usage":
             return await self._usage()
-        elif action == "list_models":
+        if action == "list_models":
             return await self._list_models()
-        elif action == "set_active_model":
+        if action == "set_active_model":
             return await self._set_active_model(model)
-        elif action == "patch_config":
+        if action == "patch_config":
             return await self._patch_config(patch or {})
-        elif action == "patch_runtime":
+        if action == "patch_runtime":
             return await self._patch_runtime(patch or {})
-        elif action == "list_cron_jobs":
+        if action == "list_cron_jobs":
             return await self._list_cron_jobs()
-        elif action == "add_cron_job":
+        if action == "add_cron_job":
             return await self._add_cron_job(cron_job or {})
-        elif action == "remove_cron_job":
+        if action == "remove_cron_job":
             return await self._remove_cron_job(job_id)
-        elif action == "restart":
+        if action == "restart":
             return await self._restart()
-        else:
-            return (
-                f"Error: Unknown action '{action}'. "
-                "Valid actions: status, usage, list_models, set_active_model, "
-                "patch_config, patch_runtime, list_cron_jobs, add_cron_job, "
-                "remove_cron_job, restart."
-            )
+        return (
+            f"Error: Unknown action '{action}'. "
+            "Valid actions: status, usage, list_models, set_active_model, "
+            "patch_config, patch_runtime, list_cron_jobs, add_cron_job, "
+            "remove_cron_job, restart."
+        )
 
     # ------------------------------------------------------------------
     # Helpers
