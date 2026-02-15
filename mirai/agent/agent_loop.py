@@ -207,6 +207,7 @@ class AgentLoop:
             l2_storage=self.l2_storage,
             l3_storage=self.l3_storage,
             msg_text=msg_text,
+            tools=self.tools,
         )
 
     async def _execute_tool(self, tool_call: ToolUseBlock) -> str:
