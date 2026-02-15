@@ -1,6 +1,6 @@
 [project]
 name = "mirai"
-version = "1.0.0"
+version = "0.2.0"
 description = "AI collaborator with multi-provider LLM support, memory consolidation, and Feishu integration"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,6 +42,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "bandit>=1.7.0",
     "hypothesis>=6.0.0",
+    "radon>=6.0.1",
 ]
 
 [tool.ruff]
