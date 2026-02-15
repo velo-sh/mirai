@@ -24,6 +24,7 @@ class ToolContext:
     provider: ProviderProtocol | None = None
     storage: DuckDBStorage | None = None
     cron_scheduler: CronScheduler | None = None
+    im_provider: Any = None
     start_time: float = field(default_factory=time.monotonic)
 
 

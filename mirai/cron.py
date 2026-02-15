@@ -1,12 +1,16 @@
-"""Cron Service — JSON5 file-based agent-driven task scheduler (RFC 0005).
+"""Cron Service — JSON5 file-based agent-driven task scheduler.
 
 Provides lightweight periodic scheduling with:
 - JSON5 file persistence (human-readable, commentable, Git-friendly)
 - System vs agent job separation (two files)
-- Atomic write with .bak backup
+- Smart timer (wakes at next due job, not fixed polling)
+- Exponential error backoff (30s → 60min)
 - External edit detection (mtime-based reload)
 - Progressive error handling (warn → disable)
 - Missed job recovery on startup
+
+Design: Cron is a pure *timer* — it wakes the agent, who uses its own tools
+(e.g. ``im_tool``) to communicate.  Cron does NOT deliver messages itself.
 """
 
 from __future__ import annotations
@@ -25,7 +29,6 @@ import json5
 from croniter import croniter  # type: ignore[import-untyped]
 
 from mirai.logging import get_logger
-from mirai.utils.service import BaseBackgroundService
 
 log = get_logger("mirai.cron")
 
@@ -33,12 +36,27 @@ log = get_logger("mirai.cron")
 # Constants
 # ---------------------------------------------------------------------------
 
-TICK_INTERVAL = 15  # seconds
+MAX_TIMER_DELAY = 60  # seconds; cap to avoid drift / long sleep
 MAX_CONCURRENT_JOBS = 3
 WARN_THRESHOLD = 3  # consecutive errors before curator alert
 DISABLE_THRESHOLD = 5  # consecutive errors before auto-disable
 MISSED_GRACE_SECONDS = 3600  # recover missed jobs within 1 hour
 EMPTY_STORE: dict[str, Any] = {"version": 1, "jobs": []}
+
+# Exponential backoff for consecutive errors (indexed by error count - 1)
+ERROR_BACKOFF_MS = [
+    30_000,       # 1st error  →  30 s
+    60_000,       # 2nd error  →   1 min
+    5 * 60_000,   # 3rd error  →   5 min
+    15 * 60_000,  # 4th error  →  15 min
+    60 * 60_000,  # 5th+ error →  60 min
+]
+
+
+def _error_backoff_ms(consecutive_errors: int) -> int:
+    """Return backoff delay in ms for the given error count."""
+    idx = min(consecutive_errors - 1, len(ERROR_BACKOFF_MS) - 1)
+    return ERROR_BACKOFF_MS[max(0, idx)]
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +176,11 @@ class _RunningJob:
     started_ms: int = field(default_factory=_now_ms)
 
 
-class CronScheduler(BaseBackgroundService):
-    """JSON5-backed scheduler with 15-second tick loop.
+class CronScheduler:
+    """JSON5-backed scheduler with smart timer.
+
+    Uses ``asyncio`` timers armed to the next due job instead of fixed-interval
+    polling.  Falls back to a 60-second cap to guard against drift.
 
     Loads two job files:
     - ``system.json5`` — bootstrap-managed, agent read-only
@@ -170,12 +191,10 @@ class CronScheduler(BaseBackgroundService):
         self,
         state_dir: Path,
         agent: Any = None,
-        im_provider: Any = None,
     ) -> None:
-        super().__init__(TICK_INTERVAL)
         self.state_dir = Path(state_dir)
         self.agent = agent
-        self.im_provider = im_provider
+        self.im_provider: Any = None  # injected by bootstrap for curator alerts only
 
         self._system_path = self.state_dir / "system.json5"
         self._jobs_path = self.state_dir / "jobs.json5"
@@ -189,60 +208,124 @@ class CronScheduler(BaseBackgroundService):
         # Concurrency tracking
         self._running: dict[str, _RunningJob] = {}
 
+        # Smart timer state
+        self._timer_handle: asyncio.TimerHandle | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stopped = False
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        """Load stores and start the tick loop."""
+        """Load stores and arm the first timer."""
+        self._loop = loop or asyncio.get_running_loop()
+        self._stopped = False
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._load_stores()
         self._startup_recovery()
-        super().start(loop)
+        self._arm_timer()
+        log.info(
+            "CronScheduler_started",
+            jobs=len(self._system_jobs) + len(self._agent_jobs),
+            next_wake_ms=self._next_wake_ms(),
+        )
+
+    def stop(self) -> None:
+        """Cancel the pending timer."""
+        self._stopped = True
+        if self._timer_handle:
+            self._timer_handle.cancel()
+            self._timer_handle = None
+        log.info("CronScheduler_stopped")
 
     # ------------------------------------------------------------------
-    # BaseBackgroundService.tick()
+    # Smart Timer (replaces fixed-interval polling)
     # ------------------------------------------------------------------
 
-    async def tick(self) -> None:
-        """Single scheduler tick — detect changes, fire due jobs, persist."""
-        # 1. Detect external file edits
-        self._maybe_reload()
-
-        # 2. Reap completed running jobs
-        self._reap_finished()
-
-        # 3. Find and fire due jobs
-        now = _now_ms()
-        all_jobs = self._system_jobs + self._agent_jobs
-        fired_any = False
-
-        for job in all_jobs:
+    def _next_wake_ms(self) -> int | None:
+        """Earliest ``nextRunAtMs`` across all enabled jobs, or *None*."""
+        earliest: int | None = None
+        for job in self._system_jobs + self._agent_jobs:
             if not job.get("enabled", True):
                 continue
+            nr = job.get("state", {}).get("nextRunAtMs")
+            if nr is not None and (earliest is None or nr < earliest):
+                earliest = nr
+        return earliest
 
-            next_run = job.get("state", {}).get("nextRunAtMs")
-            if next_run is None:
-                continue
-            if next_run > now:
-                continue
+    def _arm_timer(self) -> None:
+        """Schedule ``_on_timer`` at the next due time (capped at 60s)."""
+        if self._stopped or self._loop is None:
+            return
+        if self._timer_handle:
+            self._timer_handle.cancel()
+            self._timer_handle = None
 
-            # Concurrency cap
-            if len(self._running) >= MAX_CONCURRENT_JOBS:
-                log.debug("cron_concurrent_cap", running=len(self._running))
-                break
+        next_at = self._next_wake_ms()
+        if next_at is None:
+            # No jobs — still wake periodically to catch hot-reloaded files
+            delay: float = float(MAX_TIMER_DELAY)
+        else:
+            now = _now_ms()
+            delay = max(float(next_at - now) / 1000.0, 0.0)
+            delay = min(delay, float(MAX_TIMER_DELAY))
 
-            # Reentrance guard
-            job_id = job["id"]
-            if job_id in self._running:
-                continue
+        self._timer_handle = self._loop.call_later(delay, self._schedule_on_timer)
+        log.debug("cron_timer_armed", delay_s=round(delay, 2), next_wake_ms=next_at)
 
-            await self._fire_job(job)
-            fired_any = True
+    def _schedule_on_timer(self) -> None:
+        """Bridge from ``call_later`` (sync) to the async ``_on_timer``."""
+        if not self._stopped and self._loop is not None:
+            self._loop.create_task(self._on_timer())
 
-        # 4. Persist if anything changed
-        if fired_any:
-            self._save_agent_jobs()
+    async def _on_timer(self) -> None:
+        """Timer callback — detect changes, fire due jobs, re-arm."""
+        if self._stopped:
+            return
+
+        try:
+            # 1. Detect external file edits
+            self._maybe_reload()
+
+            # 2. Reap completed running jobs
+            self._reap_finished()
+
+            # 3. Find and fire due jobs
+            now = _now_ms()
+            all_jobs = self._system_jobs + self._agent_jobs
+            fired_any = False
+
+            for job in all_jobs:
+                if not job.get("enabled", True):
+                    continue
+
+                next_run = job.get("state", {}).get("nextRunAtMs")
+                if next_run is None:
+                    continue
+                if next_run > now:
+                    continue
+
+                # Concurrency cap
+                if len(self._running) >= MAX_CONCURRENT_JOBS:
+                    log.debug("cron_concurrent_cap", running=len(self._running))
+                    break
+
+                # Reentrance guard
+                job_id = job["id"]
+                if job_id in self._running:
+                    continue
+
+                await self._fire_job(job)
+                fired_any = True
+
+            # 4. Persist if anything changed
+            if fired_any:
+                self._save_agent_jobs()
+        except Exception as exc:
+            log.error("cron_timer_tick_failed", error=str(exc))
+        finally:
+            self._arm_timer()
 
     # ------------------------------------------------------------------
     # Job firing
@@ -264,9 +347,14 @@ class CronScheduler(BaseBackgroundService):
         self._running[job_id] = _RunningJob(job_id=job_id, task=task)
 
     async def _run_job(self, job: dict[str, Any], prompt: str) -> None:
-        """Execute a single job and update its state."""
+        """Execute a single job and update its state.
+
+        The cron layer is a pure timer — it does NOT deliver the agent's
+        response.  The agent has its own IM tools to communicate.
+        """
         job_id = job["id"]
         state = job.setdefault("state", {})
+        started_ms = _now_ms()
 
         try:
             if self.agent:
@@ -297,22 +385,37 @@ class CronScheduler(BaseBackgroundService):
         finally:
             now = _now_ms()
             state["lastRunAtMs"] = now
+            state["lastDurationMs"] = now - started_ms
 
             # Handle one-shot jobs
             if job.get("deleteAfterRun"):
                 self._agent_jobs = [j for j in self._agent_jobs if j["id"] != job_id]
                 log.info("cron_job_deleted_oneshot", job_id=job_id)
             else:
-                # Compute next run
-                next_run = compute_next_run(job.get("schedule", {}), after_ms=now)
-                if next_run:
-                    state["nextRunAtMs"] = next_run
+                # Compute next run, applying error backoff if needed
+                base_next = compute_next_run(job.get("schedule", {}), after_ms=now)
+                errors = state.get("consecutiveErrors", 0)
+                if errors > 0 and base_next is not None:
+                    backoff = _error_backoff_ms(errors)
+                    state["nextRunAtMs"] = max(base_next, now + backoff)
+                    log.info(
+                        "cron_job_error_backoff",
+                        job_id=job_id,
+                        errors=errors,
+                        backoff_ms=backoff,
+                        next_run_ms=state["nextRunAtMs"],
+                    )
+                elif base_next:
+                    state["nextRunAtMs"] = base_next
 
             # Remove from running set
             self._running.pop(job_id, None)
 
             # Persist immediately after job completes
             self._save_agent_jobs()
+
+            # Re-arm timer in case next-run changed
+            self._arm_timer()
 
     # ------------------------------------------------------------------
     # Store management

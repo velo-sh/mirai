@@ -268,8 +268,9 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
 
         # Wait a moment for the spawned task to complete
         await asyncio.sleep(0.1)
@@ -288,8 +289,9 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.1)
 
         mock_agent.run.assert_not_called()
@@ -305,8 +307,9 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.1)
 
         mock_agent.run.assert_not_called()
@@ -324,8 +327,9 @@ class TestCronScheduler:
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
         assert len(sched._agent_jobs) == 1
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         # Job should be removed
@@ -347,8 +351,9 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         # Error count should now be 5 → auto-disabled
@@ -373,8 +378,9 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=slow_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.05)
 
         # Should have at most 3 running
@@ -402,16 +408,17 @@ class TestCronScheduler:
 
         sched = self._create_scheduler(state_dir, agent=slow_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
         # First tick fires the job
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.05)
         assert "test-001" in sched._running
 
         # Second tick should NOT fire it again
         sched._agent_jobs[0]["state"]["nextRunAtMs"] = past_ms
         call_count_before = slow_agent.run.call_count
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.05)
         assert slow_agent.run.call_count == call_count_before  # no additional calls
 
@@ -570,7 +577,10 @@ class TestScheduleComputationEdgeCases:
 class TestErrorHandlingScenarios:
     def _create_scheduler(self, state_dir: Path, agent: Any = None, im_provider: Any = None) -> CronScheduler:
         ensure_system_jobs(state_dir)
-        return CronScheduler(state_dir=state_dir, agent=agent, im_provider=im_provider)
+        sched = CronScheduler(state_dir=state_dir, agent=agent)
+        if im_provider:
+            sched.im_provider = im_provider
+        return sched
 
     @pytest.mark.asyncio
     async def test_error_counter_resets_on_success(self, state_dir: Path) -> None:
@@ -584,8 +594,9 @@ class TestErrorHandlingScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert sched._agent_jobs[0]["state"]["consecutiveErrors"] == 0
@@ -606,8 +617,9 @@ class TestErrorHandlingScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent, im_provider=mock_im)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert sched._agent_jobs[0]["state"]["consecutiveErrors"] == 3
@@ -628,9 +640,10 @@ class TestErrorHandlingScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent, im_provider=mock_im)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
         # Should not raise despite IM failure
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert sched._agent_jobs[0]["state"]["consecutiveErrors"] == 3
@@ -648,8 +661,9 @@ class TestErrorHandlingScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert len(sched._agent_jobs[0]["state"]["lastError"]) == 200
@@ -694,8 +708,9 @@ class TestMultiJobScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert mock_agent.run.call_count == 2  # only 2 due jobs
@@ -716,8 +731,9 @@ class TestMultiJobScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert mock_agent.run.call_count == 2
@@ -737,8 +753,9 @@ class TestMultiJobScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.3)
 
         assert len(sched._agent_jobs) == 1
@@ -753,8 +770,9 @@ class TestMultiJobScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.1)
 
         mock_agent.run.assert_not_called()
@@ -779,9 +797,10 @@ class TestNoAgentScenarios:
 
         sched = self._create_scheduler(state_dir, agent=None)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
         # Should not crash
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         # Job completes successfully (no-op)
@@ -799,8 +818,9 @@ class TestNoAgentScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.1)
 
         mock_agent.run.assert_not_called()
@@ -823,9 +843,10 @@ class TestNoAgentScenarios:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
         # Should not crash
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.1)
 
         mock_agent.run.assert_not_called()
@@ -959,8 +980,9 @@ class TestStatePersistenceEdgeCases:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         # Reload from disk and verify error state was persisted
@@ -981,8 +1003,9 @@ class TestStatePersistenceEdgeCases:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         assert sched._agent_jobs[0]["state"]["runCount"] == 11
@@ -999,9 +1022,10 @@ class TestStatePersistenceEdgeCases:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
         before = int(time.time() * 1000)
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
         after = int(time.time() * 1000)
 
@@ -1023,8 +1047,9 @@ class TestStatePersistenceEdgeCases:
 
         sched = self._create_scheduler(state_dir, agent=mock_agent)
         sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
 
-        await sched.tick()
+        await sched._on_timer()
         await asyncio.sleep(0.2)
 
         now = int(time.time() * 1000)
@@ -1081,3 +1106,571 @@ class TestReapFinished:
         sched._reap_finished()  # should not raise
 
         assert "fail-job" not in sched._running
+
+
+# ---------------------------------------------------------------------------
+# QA: _error_backoff_ms pure function tests
+# ---------------------------------------------------------------------------
+
+
+class TestErrorBackoff:
+    """Tests for the exponential error backoff schedule."""
+
+    def test_first_error_30s(self) -> None:
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(1) == 30_000
+
+    def test_second_error_1m(self) -> None:
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(2) == 60_000
+
+    def test_third_error_5m(self) -> None:
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(3) == 5 * 60_000
+
+    def test_fourth_error_15m(self) -> None:
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(4) == 15 * 60_000
+
+    def test_fifth_error_60m(self) -> None:
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(5) == 60 * 60_000
+
+    def test_beyond_fifth_caps_at_60m(self) -> None:
+        """Errors beyond 5th still return 60 min (table cap)."""
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(10) == 60 * 60_000
+        assert _error_backoff_ms(100) == 60 * 60_000
+
+    def test_zero_errors_treated_as_first(self) -> None:
+        """Edge case: 0 errors clamps to index 0."""
+        from mirai.cron import _error_backoff_ms
+
+        assert _error_backoff_ms(0) == 30_000
+
+
+# ---------------------------------------------------------------------------
+# QA: Smart timer — _next_wake_ms
+# ---------------------------------------------------------------------------
+
+
+class TestNextWakeMs:
+    """Tests for the _next_wake_ms helper that finds the earliest due time."""
+
+    def _create_scheduler(self, state_dir: Path) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir)
+
+    def test_no_jobs_returns_none(self, state_dir: Path) -> None:
+        """With no enabled jobs having nextRunAtMs, returns None."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        # Default system jobs are disabled, so should return None
+        assert sched._next_wake_ms() is None
+
+    def test_single_job_returns_its_time(self, state_dir: Path) -> None:
+        target_ms = 2_000_000_000_000
+        job = _make_job(state={"nextRunAtMs": target_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+
+        assert sched._next_wake_ms() == target_ms
+
+    def test_picks_earliest_among_multiple(self, state_dir: Path) -> None:
+        """Returns the smallest nextRunAtMs among all enabled jobs."""
+        jobs = [
+            _make_job(job_id="a", state={"nextRunAtMs": 3000}),
+            _make_job(job_id="b", state={"nextRunAtMs": 1000}),
+            _make_job(job_id="c", state={"nextRunAtMs": 2000}),
+        ]
+        _write_jobs(state_dir / "jobs.json5", jobs)
+
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+
+        assert sched._next_wake_ms() == 1000
+
+    def test_disabled_jobs_are_excluded(self, state_dir: Path) -> None:
+        """Disabled jobs are not considered for wake time."""
+        jobs = [
+            _make_job(job_id="disabled", enabled=False, state={"nextRunAtMs": 500}),
+            _make_job(job_id="enabled", state={"nextRunAtMs": 5000}),
+        ]
+        _write_jobs(state_dir / "jobs.json5", jobs)
+
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+
+        assert sched._next_wake_ms() == 5000  # ignores the disabled job at 500
+
+    def test_jobs_without_next_run_are_excluded(self, state_dir: Path) -> None:
+        """Jobs without nextRunAtMs in state don't affect wake time."""
+        jobs = [
+            _make_job(job_id="no-state", state={}),
+            _make_job(job_id="has-state", state={"nextRunAtMs": 9000}),
+        ]
+        _write_jobs(state_dir / "jobs.json5", jobs)
+
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+
+        assert sched._next_wake_ms() == 9000
+
+
+# ---------------------------------------------------------------------------
+# QA: Smart timer — _arm_timer lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestArmTimer:
+    """Tests for _arm_timer scheduling behavior."""
+
+    def _create_scheduler(self, state_dir: Path) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir)
+
+    @pytest.mark.asyncio
+    async def test_arm_timer_creates_handle(self, state_dir: Path) -> None:
+        """Calling _arm_timer sets _timer_handle."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        assert sched._timer_handle is None
+        sched._arm_timer()
+        assert sched._timer_handle is not None
+
+        # Cleanup
+        sched._timer_handle.cancel()
+
+    @pytest.mark.asyncio
+    async def test_arm_timer_cancels_previous(self, state_dir: Path) -> None:
+        """Re-arming cancels the old handle and sets a new one."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        sched._arm_timer()
+        first_handle = sched._timer_handle
+        assert first_handle is not None
+
+        sched._arm_timer()
+        second_handle = sched._timer_handle
+        assert second_handle is not first_handle
+        assert first_handle.cancelled()
+
+        # Cleanup
+        if second_handle:
+            second_handle.cancel()
+
+    @pytest.mark.asyncio
+    async def test_arm_timer_noop_when_stopped(self, state_dir: Path) -> None:
+        """_arm_timer does nothing after stop()."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+        sched._stopped = True
+
+        sched._arm_timer()
+        assert sched._timer_handle is None
+
+    @pytest.mark.asyncio
+    async def test_arm_timer_noop_without_loop(self, state_dir: Path) -> None:
+        """_arm_timer does nothing when _loop is None."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        # _loop is None by default
+
+        sched._arm_timer()
+        assert sched._timer_handle is None
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_timer(self, state_dir: Path) -> None:
+        """stop() cancels any pending timer handle."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        sched._arm_timer()
+        assert sched._timer_handle is not None
+
+        sched.stop()
+        assert sched._stopped is True
+        assert sched._timer_handle is None
+
+
+# ---------------------------------------------------------------------------
+# QA: Duration tracking (lastDurationMs)
+# ---------------------------------------------------------------------------
+
+
+class TestDurationTracking:
+    """Tests for lastDurationMs recorded per job execution."""
+
+    def _create_scheduler(self, state_dir: Path, agent: Any = None) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir, agent=agent)
+
+    @pytest.mark.asyncio
+    async def test_duration_recorded_on_success(self, state_dir: Path) -> None:
+        """lastDurationMs is set after successful run."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="ok")
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        duration = sched._agent_jobs[0]["state"].get("lastDurationMs")
+        assert duration is not None
+        assert duration >= 0
+
+    @pytest.mark.asyncio
+    async def test_duration_recorded_on_error(self, state_dir: Path) -> None:
+        """lastDurationMs is set even when the job fails."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("fail"))
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        duration = sched._agent_jobs[0]["state"].get("lastDurationMs")
+        assert duration is not None
+        assert duration >= 0
+        assert sched._agent_jobs[0]["state"]["lastStatus"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_duration_persisted_to_disk(self, state_dir: Path) -> None:
+        """lastDurationMs survives round-trip to disk."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="ok")
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        loaded = _load_json5(state_dir / "jobs.json5")
+        assert "lastDurationMs" in loaded["jobs"][0]["state"]
+        assert loaded["jobs"][0]["state"]["lastDurationMs"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# QA: Error backoff applied to nextRunAtMs
+# ---------------------------------------------------------------------------
+
+
+class TestErrorBackoffApplied:
+    """Tests that error backoff delays are applied to next schedule time."""
+
+    def _create_scheduler(self, state_dir: Path, agent: Any = None) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir, agent=agent)
+
+    @pytest.mark.asyncio
+    async def test_first_error_delays_next_run_by_30s(self, state_dir: Path) -> None:
+        """After 1 error, nextRunAtMs is pushed back by >= 30s from now."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("boom"))
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(
+            schedule={"kind": "every", "everyMs": 1000},  # very short interval
+            state={"nextRunAtMs": past_ms},
+        )
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        now_ms = int(time.time() * 1000)
+        next_run = sched._agent_jobs[0]["state"]["nextRunAtMs"]
+        # With 1s interval, normal next_run would be ~now+1s
+        # Error backoff pushes it to at least now + 30s
+        assert next_run >= now_ms + 25_000  # allow small timing tolerance
+
+    @pytest.mark.asyncio
+    async def test_no_backoff_on_success(self, state_dir: Path) -> None:
+        """After success, nextRunAtMs uses normal schedule (no backoff)."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="ok")
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(
+            schedule={"kind": "every", "everyMs": 60_000},
+            state={"nextRunAtMs": past_ms},
+        )
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        now_ms = int(time.time() * 1000)
+        next_run = sched._agent_jobs[0]["state"]["nextRunAtMs"]
+        # Normal schedule: ~now + 60s (not pushed further by backoff)
+        assert next_run <= now_ms + 65_000  # within normal range
+
+    @pytest.mark.asyncio
+    async def test_consecutive_errors_increase_backoff(self, state_dir: Path) -> None:
+        """More consecutive errors yield longer backoff delays."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("keep failing"))
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(
+            schedule={"kind": "every", "everyMs": 1000},
+            state={"nextRunAtMs": past_ms, "consecutiveErrors": 2},  # already at 2
+        )
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        # Now at 3 errors → 5 min backoff
+        now_ms = int(time.time() * 1000)
+        next_run = sched._agent_jobs[0]["state"]["nextRunAtMs"]
+        assert sched._agent_jobs[0]["state"]["consecutiveErrors"] == 3
+        assert next_run >= now_ms + (4 * 60_000)  # at least ~4 min (tolerance)
+
+    @pytest.mark.asyncio
+    async def test_backoff_resets_after_success(self, state_dir: Path) -> None:
+        """Success after errors resets consecutiveErrors and uses normal schedule."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="recovered!")
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(
+            schedule={"kind": "every", "everyMs": 60_000},
+            state={"nextRunAtMs": past_ms, "consecutiveErrors": 4},
+        )
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        assert sched._agent_jobs[0]["state"]["consecutiveErrors"] == 0
+        now_ms = int(time.time() * 1000)
+        next_run = sched._agent_jobs[0]["state"]["nextRunAtMs"]
+        # Should be ~now + 60s, not pushed by 15 min backoff
+        assert next_run <= now_ms + 65_000
+
+
+# ---------------------------------------------------------------------------
+# QA: _on_timer re-arm and resilience
+# ---------------------------------------------------------------------------
+
+
+class TestOnTimerResilience:
+    """Tests that _on_timer correctly re-arms even after internal failures."""
+
+    def _create_scheduler(self, state_dir: Path, agent: Any = None) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir, agent=agent)
+
+    @pytest.mark.asyncio
+    async def test_on_timer_re_arms_after_job_errors(self, state_dir: Path) -> None:
+        """Timer re-arms even when all jobs fail."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("fail"))
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        # Timer should still be armed after the error
+        assert sched._timer_handle is not None
+        sched._timer_handle.cancel()
+
+    @pytest.mark.asyncio
+    async def test_on_timer_skipped_when_stopped(self, state_dir: Path) -> None:
+        """_on_timer is a no-op when scheduler is stopped."""
+        mock_agent = AsyncMock()
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+        sched._stopped = True
+
+        await sched._on_timer()
+        await asyncio.sleep(0.1)
+
+        # Nothing should have fired
+        mock_agent.run.assert_not_called()
+        assert sched._timer_handle is None
+
+    @pytest.mark.asyncio
+    async def test_on_timer_re_arms_with_no_due_jobs(self, state_dir: Path) -> None:
+        """Timer re-arms even when there are no due jobs."""
+        future_ms = int(time.time() * 1000) + 3_600_000
+        job = _make_job(state={"nextRunAtMs": future_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.05)
+
+        # Timer should be re-armed for the future job
+        assert sched._timer_handle is not None
+        sched._timer_handle.cancel()
+
+    @pytest.mark.asyncio
+    async def test_on_timer_re_arms_with_empty_job_list(self, state_dir: Path) -> None:
+        """Timer re-arms even with zero jobs (fallback to MAX_TIMER_DELAY)."""
+        sched = self._create_scheduler(state_dir)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.05)
+
+        assert sched._timer_handle is not None
+        sched._timer_handle.cancel()
+
+
+# ---------------------------------------------------------------------------
+# QA: Delivery-free cron (agent uses im_tool)
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryFreeCron:
+    """Verify cron does NOT deliver messages; agent response is discarded."""
+
+    def _create_scheduler(self, state_dir: Path, agent: Any = None) -> CronScheduler:
+        ensure_system_jobs(state_dir)
+        return CronScheduler(state_dir=state_dir, agent=agent)
+
+    @pytest.mark.asyncio
+    async def test_agent_return_value_is_discarded(self, state_dir: Path) -> None:
+        """Agent run() return value is not propagated or used by cron."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="I want to send this to Feishu!")
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        # Agent was called, but its return value was discarded
+        mock_agent.run.assert_called_once()
+        # Cron has no im_provider reference for delivery
+        assert sched.im_provider is None
+        # Job still marked as successful
+        assert sched._agent_jobs[0]["state"]["lastStatus"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_im_provider_not_used_for_delivery(self, state_dir: Path) -> None:
+        """Even if im_provider is set, it is NOT used for job result delivery."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(return_value="result text")
+        mock_im = AsyncMock()
+        mock_im.send_message = AsyncMock()
+        mock_im.send_markdown = AsyncMock()
+
+        past_ms = int(time.time() * 1000) - 1000
+        job = _make_job(state={"nextRunAtMs": past_ms})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched.im_provider = mock_im
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        # Agent was called
+        mock_agent.run.assert_called_once()
+        # IM provider was NOT called for delivery (only for alerts on errors)
+        mock_im.send_message.assert_not_called()
+        mock_im.send_markdown.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_im_provider_used_for_curator_alerts_only(self, state_dir: Path) -> None:
+        """im_provider.send_markdown is only called for error alerts, not delivery."""
+        mock_agent = AsyncMock()
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("critical failure"))
+        mock_im = AsyncMock()
+        mock_im.send_markdown = AsyncMock()
+
+        past_ms = int(time.time() * 1000) - 1000
+        # 3rd consecutive error triggers WARN_THRESHOLD alert
+        job = _make_job(state={"nextRunAtMs": past_ms, "consecutiveErrors": 2})
+        _write_jobs(state_dir / "jobs.json5", [job])
+
+        sched = self._create_scheduler(state_dir, agent=mock_agent)
+        sched.im_provider = mock_im
+        sched._load_stores()
+        sched._loop = asyncio.get_running_loop()
+
+        await sched._on_timer()
+        await asyncio.sleep(0.2)
+
+        # send_markdown called for curator alert (not for delivery)
+        mock_im.send_markdown.assert_called()
+        call_args = mock_im.send_markdown.call_args
+        assert "failed" in call_args.kwargs.get("content", "") or "failed" in str(call_args)
