@@ -137,29 +137,27 @@ class TestQuotaDataWiringEdgeCases:
         from mirai.agent.registry import ModelRegistry
         from mirai.agent.registry_models import RegistryData
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = tmp_path / "registry.json"
-        reg._data = RegistryData.from_dict(
-            {
-                "last_refreshed": "2025-01-01T00:00:00Z",
-                "active_provider": "minimax",
-                "active_model": "MiniMax-M2.5",
-                "providers": {
-                    "minimax": {
-                        "available": True,
-                        "models": [
-                            {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Advanced"},
-                            {"id": "MiniMax-VL-01", "name": "MiniMax VL-01", "description": "Vision"},
-                        ],
+        reg = ModelRegistry.for_testing(
+            path=tmp_path / "registry.json",
+            config_provider="minimax",
+            config_model="MiniMax-M2.5",
+            data=RegistryData.from_dict(
+                {
+                    "last_refreshed": "2025-01-01T00:00:00Z",
+                    "active_provider": "minimax",
+                    "active_model": "MiniMax-M2.5",
+                    "providers": {
+                        "minimax": {
+                            "available": True,
+                            "models": [
+                                {"id": "MiniMax-M2.5", "name": "MiniMax M2.5", "description": "Advanced"},
+                                {"id": "MiniMax-VL-01", "name": "MiniMax VL-01", "description": "Vision"},
+                            ],
+                        },
                     },
-                },
-            }
+                }
+            ),
         )
-        reg._config_provider = "minimax"
-        reg._config_model = "MiniMax-M2.5"
-        reg._enrichment_source = None
-        reg._free_source = None
-        reg._health_status = {}
         return reg
 
     @pytest.mark.asyncio
@@ -753,25 +751,23 @@ class TestListModelsDispatch:
         from mirai.agent.registry_models import RegistryData
         from mirai.agent.tools.system import SystemTool
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = Path("/tmp/test_reg.json")
-        reg._data = RegistryData.from_dict(
-            {
-                "active_provider": "mock",
-                "active_model": "mock-model",
-                "providers": {
-                    "mock": {
-                        "available": True,
-                        "models": [{"id": "mock-model", "name": "Mock Model", "description": "Test"}],
+        reg = ModelRegistry.for_testing(
+            path=Path("/tmp/test_reg.json"),
+            config_provider="mock",
+            config_model="mock-model",
+            data=RegistryData.from_dict(
+                {
+                    "active_provider": "mock",
+                    "active_model": "mock-model",
+                    "providers": {
+                        "mock": {
+                            "available": True,
+                            "models": [{"id": "mock-model", "name": "Mock Model", "description": "Test"}],
+                        },
                     },
-                },
-            }
+                }
+            ),
         )
-        reg._config_provider = "mock"
-        reg._config_model = "mock-model"
-        reg._enrichment_source = None
-        reg._free_source = None
-        reg._health_status = {}
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")
@@ -786,25 +782,23 @@ class TestListModelsDispatch:
         from mirai.agent.registry_models import RegistryData
         from mirai.agent.tools.system import SystemTool
 
-        reg = ModelRegistry.__new__(ModelRegistry)
-        reg._path = Path("/tmp/test_reg2.json")
-        reg._data = RegistryData.from_dict(
-            {
-                "active_provider": "minimax",
-                "active_model": "M2.5",
-                "providers": {
-                    "minimax": {
-                        "available": True,
-                        "models": [{"id": "M2.5", "name": "M2.5", "description": "Test"}],
+        reg = ModelRegistry.for_testing(
+            path=Path("/tmp/test_reg2.json"),
+            config_provider="minimax",
+            config_model="M2.5",
+            data=RegistryData.from_dict(
+                {
+                    "active_provider": "minimax",
+                    "active_model": "M2.5",
+                    "providers": {
+                        "minimax": {
+                            "available": True,
+                            "models": [{"id": "M2.5", "name": "M2.5", "description": "Test"}],
+                        },
                     },
-                },
-            }
+                }
+            ),
         )
-        reg._config_provider = "minimax"
-        reg._config_model = "M2.5"
-        reg._enrichment_source = None
-        reg._free_source = None
-        reg._health_status = {}
 
         tool = SystemTool(registry=reg)
         result = await tool.execute(action="list_models")

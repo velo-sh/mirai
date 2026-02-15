@@ -147,6 +147,35 @@ class ModelRegistry:
         self._free_source: FreeProviderSource | None = None
         self._health_status: dict[str, Any] = {}  # name -> ProviderHealthStatus
 
+    @classmethod
+    def for_testing(
+        cls,
+        *,
+        data: RegistryData | None = None,
+        path: Path | None = None,
+        config_provider: str | None = None,
+        config_model: str | None = None,
+        enrichment_source: EnrichmentSource | None = None,
+        free_source: FreeProviderSource | None = None,
+        health_status: dict[str, Any] | None = None,
+    ) -> ModelRegistry:
+        """Create a ModelRegistry for testing without touching disk.
+
+        Bypasses ``__init__`` (which calls ``_load()`` from disk) and directly
+        sets internal attributes.  Using this factory ensures tests stay in
+        sync with any future attributes added to ``__init__``.
+        """
+        reg = cls.__new__(cls)
+        reg._config_provider = config_provider
+        reg._config_model = config_model
+        reg._data = data or RegistryData()
+        reg._enrichment_source = enrichment_source
+        reg._free_source = free_source
+        reg._health_status = health_status or {}
+        if path is not None:
+            reg.PATH = path  # type: ignore[misc]
+        return reg
+
     def set_enrichment_source(self, source: EnrichmentSource) -> None:
         """Register an external metadata enrichment source.
 

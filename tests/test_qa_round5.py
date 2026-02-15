@@ -253,7 +253,7 @@ class TestBootstrapDecomposition:
             await asyncio.sleep(0.05)
             assert task not in app._tasks
 
-        asyncio.get_event_loop().run_until_complete(_inner())
+        asyncio.run(_inner())
 
     def test_track_task_logs_exception(self):
         """_track_task should log but not propagate errors."""
@@ -272,7 +272,7 @@ class TestBootstrapDecomposition:
             assert task not in app._tasks
             assert task.done()
 
-        asyncio.get_event_loop().run_until_complete(_inner())
+        asyncio.run(_inner())
 
     def test_shutdown_cancels_tasks(self):
         """shutdown() should cancel all tracked tasks."""
@@ -293,7 +293,7 @@ class TestBootstrapDecomposition:
             assert len(app._tasks) == 0
             assert task.cancelled()
 
-        asyncio.get_event_loop().run_until_complete(_inner())
+        asyncio.run(_inner())
 
     def test_create_method_has_lifecycle_phases(self):
         """Verify that MiraiApp has the four lifecycle methods."""
