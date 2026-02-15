@@ -458,6 +458,75 @@ class ModelRegistry:
         """Resolve active model: registry (runtime) > config.toml (default)."""
         return self._data.active_model or self._config_model or "unknown"
 
+    def _format_model_entry(
+        self,
+        model: RegistryModelEntry,
+        is_current: bool,
+        quota_data: dict[str, float] | None,
+    ) -> list[str]:
+        """Format a single model entry as catalog lines."""
+        lines: list[str] = []
+        marker = " ← current" if is_current else ""
+
+        tags = []
+        if model.reasoning:
+            tags.append("reasoning")
+        if model.vision:
+            tags.append("vision")
+        if model.supports_tool_use:
+            tags.append("tool_use")
+        if model.supports_json_mode:
+            tags.append("json_mode")
+
+        tag_str = " ".join(f"[{t}]" for t in tags)
+        desc = f"  - {model.id}: {model.description or model.name}"
+        if tag_str:
+            desc += f" {tag_str}"
+
+        if quota_data and model.id in quota_data:
+            pct = quota_data[model.id]
+            if pct >= 100.0:
+                desc += " ⚠️ exhausted"
+            elif pct >= 80.0:
+                desc += f" ({pct:.0f}% used)"
+
+        lines.append(desc + marker)
+
+        details = []
+        ctx = _format_context(model.context_window)
+        if ctx:
+            details.append(ctx)
+        pricing = _format_pricing(model.input_price, model.output_price)
+        if pricing:
+            details.append(pricing)
+        if model.knowledge_cutoff:
+            details.append(f"cutoff {model.knowledge_cutoff}")
+        if details:
+            lines.append(f"    {' · '.join(details)}")
+
+        return lines
+
+    def _format_unconfigured_providers(self) -> list[str]:
+        """Format the unconfigured free providers suggestion section."""
+        available_providers = {k for k, v in self._data.providers.items() if v.available}
+        unconfigured_free: list[ProviderSpec] = []
+        for spec in _build_provider_specs():
+            if spec.signup_url and spec.name not in available_providers:
+                unconfigured_free.append(spec)
+
+        if not unconfigured_free:
+            return []
+
+        lines = ["\n### Free providers (not configured):"]
+        for spec in unconfigured_free:
+            note = f" — {spec.notes}" if spec.notes else ""
+            cat_pdata = self._data.providers.get(spec.name)
+            model_hint = ""
+            if cat_pdata and cat_pdata.models:
+                model_hint = f" ({len(cat_pdata.models)} models available)"
+            lines.append(f"  ✗ {spec.name}{model_hint}: set {spec.env_key} (signup: {spec.signup_url}){note}")
+        return lines
+
     def get_catalog_text(self, quota_data: dict[str, float] | None = None) -> str:
         """Format the full model catalog as human-readable text.
 
@@ -476,13 +545,6 @@ class ModelRegistry:
             lines.append(f"Last refreshed: {self._data.last_refreshed}")
 
         available_providers = {k: v for k, v in self._data.providers.items() if v.available}
-        unconfigured_free: list[ProviderSpec] = []
-
-        # Identify unconfigured free providers for the suggestion section
-        all_specs = _build_provider_specs()
-        for spec in all_specs:
-            if spec.signup_url and spec.name not in available_providers:
-                unconfigured_free.append(spec)
 
         if not available_providers:
             lines.append("\nNo providers with configured API keys found.")
@@ -506,58 +568,10 @@ class ModelRegistry:
                     continue
 
                 for m in pdata.models:
-                    marker = " ← current" if (is_active and m.id == self.active_model) else ""
+                    is_current = is_active and m.id == self.active_model
+                    lines.extend(self._format_model_entry(m, is_current, quota_data))
 
-                    # Main line: id + description + capability tags
-                    tags = []
-                    if m.reasoning:
-                        tags.append("reasoning")
-                    if m.vision:
-                        tags.append("vision")
-                    if m.supports_tool_use:
-                        tags.append("tool_use")
-                    if m.supports_json_mode:
-                        tags.append("json_mode")
-
-                    tag_str = " ".join(f"[{t}]" for t in tags)
-                    desc = f"  - {m.id}: {m.description or m.name}"
-                    if tag_str:
-                        desc += f" {tag_str}"
-
-                    # Quota annotation
-                    if quota_data and m.id in quota_data:
-                        pct = quota_data[m.id]
-                        if pct >= 100.0:
-                            desc += " ⚠️ exhausted"
-                        elif pct >= 80.0:
-                            desc += f" ({pct:.0f}% used)"
-
-                    lines.append(desc + marker)
-
-                    # Detail line: context + pricing + cutoff
-                    details = []
-                    ctx = _format_context(m.context_window)
-                    if ctx:
-                        details.append(ctx)
-                    pricing = _format_pricing(m.input_price, m.output_price)
-                    if pricing:
-                        details.append(pricing)
-                    if m.knowledge_cutoff:
-                        details.append(f"cutoff {m.knowledge_cutoff}")
-                    if details:
-                        lines.append(f"    {' · '.join(details)}")
-
-        # Show unconfigured free providers as suggestions
-        if unconfigured_free:
-            lines.append("\n### Free providers (not configured):")
-            for spec in unconfigured_free:
-                note = f" — {spec.notes}" if spec.notes else ""
-                # Show model count if public model data was fetched
-                cat_pdata = self._data.providers.get(spec.name)
-                model_hint = ""
-                if cat_pdata and cat_pdata.models:
-                    model_hint = f" ({len(cat_pdata.models)} models available)"
-                lines.append(f"  ✗ {spec.name}{model_hint}: set {spec.env_key} (signup: {spec.signup_url}){note}")
+        lines.extend(self._format_unconfigured_providers())
 
         return "\n".join(lines)
 

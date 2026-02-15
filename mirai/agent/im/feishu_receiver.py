@@ -188,6 +188,98 @@ class FeishuEventReceiver:
         except Exception as e:
             log.error("feishu_msg_process_error", error=str(e), exc_info=True)
 
+    async def _send_thinking_reaction(self, message_id: str) -> None:
+        """Send a 'thinking' emoji reaction to indicate processing."""
+        reaction_request = (
+            CreateMessageReactionRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type("THINKING").build())
+                .build()
+            )
+            .build()
+        )
+        reaction_resp = await self._reply_client.im.v1.message_reaction.acreate(reaction_request)  # type: ignore[union-attr]
+        if reaction_resp.success():
+            log.info("feishu_thinking_reaction_sent", msg_id=message_id)
+        else:
+            log.error("feishu_reaction_failed", code=reaction_resp.code, msg=reaction_resp.msg)
+
+    async def _load_history(self, chat_id: str) -> list[dict[str, str]]:
+        """Load or initialize conversation history for a chat."""
+        history = self._conversations.get(chat_id)
+        if history is not None:
+            return history
+
+        if self._storage:
+            messages = await self._storage.get_feishu_history(chat_id, limit=self.MAX_HISTORY_TURNS * 2)
+            history = [{"role": m.role, "content": m.content} for m in messages]
+            self._conversations[chat_id] = history
+            log.info("history_loaded_from_storage", chat_id=chat_id, turns=len(history) // 2)
+        else:
+            history = []
+            self._conversations[chat_id] = history
+        return history
+
+    async def _process_image_blocks(self, message_content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Download image resources and convert blocks to base64 format."""
+        new_content = []
+        for block in message_content:
+            if block.get("type") == "image":
+                image_key = block["image_key"]
+                msg_id = block["msg_id"]
+                log.info("downloading_image", image_key=image_key)
+                image_data = await self._download_image(msg_id, image_key)
+                if image_data:
+                    new_content.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": base64.b64encode(image_data).decode(),
+                            },
+                        }
+                    )
+                else:
+                    new_content.append({"type": "text", "text": "[Image download failed]"})
+            else:
+                new_content.append(block)
+        return new_content
+
+    async def _send_reply_card(self, message_id: str, reply_text: str) -> None:
+        """Send a Feishu interactive card reply."""
+        card_body = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "Mira"},
+                "template": "blue",
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": reply_text},
+                }
+            ],
+        }
+        reply_request = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .msg_type("interactive")
+                .content(orjson.dumps(card_body).decode())
+                .build()
+            )
+            .build()
+        )
+        reply_resp = await self._reply_client.im.v1.message.areply(reply_request)  # type: ignore[union-attr]
+        if reply_resp.success():
+            log.info("feishu_reply_sent", msg_id=message_id)
+        else:
+            log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
+
     async def _process_and_reply(
         self, message_content: str | list[dict[str, Any]], sender_id: str, message_id: str, chat_id: str
     ) -> None:
@@ -200,103 +292,20 @@ class FeishuEventReceiver:
         4. Record the exchange in conversation history
         """
         try:
-            # Step 1: Send "Thinking..." reaction immediately
-            reaction_request = (
-                CreateMessageReactionRequest.builder()
-                .message_id(message_id)
-                .request_body(
-                    CreateMessageReactionRequestBody.builder()
-                    .reaction_type(Emoji.builder().emoji_type("THINKING").build())
-                    .build()
-                )
-                .build()
-            )
-            # Use the same client (ReplyClient is used for messages, but reactions are also in im.v1)
-            reaction_resp = await self._reply_client.im.v1.message_reaction.acreate(reaction_request)  # type: ignore[union-attr]
-            if reaction_resp.success():
-                log.info("feishu_thinking_reaction_sent", msg_id=message_id)
-            else:
-                log.error("feishu_reaction_failed", code=reaction_resp.code, msg=reaction_resp.msg)
+            await self._send_thinking_reaction(message_id)
 
-            # Step 2: Get conversation history for this chat
-            history = self._conversations.get(chat_id)
-            if history is None:
-                # Cache miss - try to load from persistent storage
-                if self._storage:
-                    messages = await self._storage.get_feishu_history(chat_id, limit=self.MAX_HISTORY_TURNS * 2)
-                    # Convert models back to lists for the internal handler/loop compat
-                    history = [{"role": m.role, "content": m.content} for m in messages]
-                    self._conversations[chat_id] = history
-                    log.info("history_loaded_from_storage", chat_id=chat_id, turns=len(history) // 2)
-                else:
-                    history = []
-                    self._conversations[chat_id] = history
+            history = await self._load_history(chat_id)
 
-            # Step 3: Process the message through AgentLoop with history
-            # If message is a list, process image blocks
+            # Process image blocks if multimodal message
             processed_content: str | list[dict[str, Any]] = message_content
             if isinstance(message_content, list):
-                new_content = []
-                for block in message_content:
-                    if block.get("type") == "image":
-                        image_key = block["image_key"]
-                        msg_id = block["msg_id"]
-                        log.info("downloading_image", image_key=image_key)
-                        image_data = await self._download_image(msg_id, image_key)
-                        if image_data:
-                            new_content.append(
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/png",  # Feishu images are generally returned as a stream
-                                        "data": base64.b64encode(image_data).decode(),
-                                    },
-                                }
-                            )
-                        else:
-                            new_content.append({"type": "text", "text": "[Image download failed]"})
-                    else:
-                        new_content.append(block)
-                processed_content = new_content
+                processed_content = await self._process_image_blocks(message_content)
 
             reply_text = await self._message_handler(sender_id, processed_content, chat_id, history)
-
             if not reply_text:
                 reply_text = "I received your message but couldn't generate a response."
 
-            # Step 4: Send the real response as a markdown card (reply to maintain thread)
-            card_body = {
-                "config": {"wide_screen_mode": True},
-                "header": {
-                    "title": {"tag": "plain_text", "content": "Mira"},
-                    "template": "blue",
-                },
-                "elements": [
-                    {
-                        "tag": "div",
-                        "text": {"tag": "lark_md", "content": reply_text},
-                    }
-                ],
-            }
-            reply_request = (
-                ReplyMessageRequest.builder()
-                .message_id(message_id)
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .msg_type("interactive")
-                    .content(orjson.dumps(card_body).decode())
-                    .build()
-                )
-                .build()
-            )
-            reply_resp = await self._reply_client.im.v1.message.areply(reply_request)  # type: ignore[union-attr]
-            if reply_resp.success():
-                log.info("feishu_reply_sent", msg_id=message_id)
-            else:
-                log.error("feishu_reply_failed", code=reply_resp.code, msg=reply_resp.msg)
-
-            # Step 5: Record this exchange in conversation history
+            await self._send_reply_card(message_id, reply_text)
             await self._record_exchange(chat_id, processed_content, reply_text)
 
         except Exception as e:
