@@ -13,10 +13,10 @@ import orjson
 from mirai.agent.providers.base import ProviderProtocol
 from mirai.logging import get_logger
 
-log = get_logger("mirai.agent.prompt")
+from mirai.agent.tools.base import BaseTool
 
 
-def _build_tools_section(tools: dict[str, Any]) -> str:
+def _build_tools_section(tools: dict[str, BaseTool]) -> str:
     """Build the '## Available Tools' section by reading each tool's own definition.
 
     Each tool carries a ``definition`` property with a ``description`` field.
@@ -27,11 +27,7 @@ def _build_tools_section(tools: dict[str, Any]) -> str:
 
     lines = ["## Available Tools", "You have the following tools:"]
     for name, tool in tools.items():
-        desc = ""
-        if hasattr(tool, "definition"):
-            defn = tool.definition
-            if isinstance(defn, dict):
-                desc = defn.get("description", "")
+        desc = tool.definition.get("description", "")
         if desc:
             lines.append(f"- **{name}**: {desc}")
         else:

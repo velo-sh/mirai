@@ -29,10 +29,6 @@ def _make_tool_no_desc(name: str) -> MagicMock:
     return tool
 
 
-def _make_tool_no_definition() -> MagicMock:
-    """Create a mock tool without a definition property."""
-    tool = MagicMock(spec=[])  # spec=[] means no attributes at all
-    return tool
 
 
 def _mock_deps() -> dict[str, Any]:
@@ -99,13 +95,6 @@ class TestBuildToolsSection:
         assert "- **mystery_tool**" in result
         # Should NOT have a colon after the name (no description)
         assert "- **mystery_tool**:" not in result
-
-    def test_tool_without_definition_attr(self):
-        """A tool that has no 'definition' attribute should still be listed."""
-        tools = {"raw_tool": _make_tool_no_definition()}
-        result = _build_tools_section(tools)
-
-        assert "- **raw_tool**" in result
 
     def test_preserves_tool_order(self):
         """Tools should appear in insertion order (dict order)."""
