@@ -101,6 +101,12 @@ class MiraiApp:
         if self.cron and self.agent:
             self.cron.agent = self.agent
         await self._init_integrations()
+        # Wire im_provider into tools and cron (for curator alerts)
+        if hasattr(self, "_im_provider") and self._im_provider:
+            if self.cron:
+                self.cron.im_provider = self._im_provider
+            if hasattr(self, "_tool_context"):
+                self._tool_context.im_provider = self._im_provider
         self._init_background_tasks()
 
         return self
@@ -119,7 +125,7 @@ class MiraiApp:
 
         # Stop background services
         if self.cron:
-            await self.cron.stop()
+            self.cron.stop()
         if self.dreamer:
             await self.dreamer.stop()
         if self.heartbeat:
@@ -224,6 +230,7 @@ class MiraiApp:
             from mirai.agent.tools.echo import EchoTool
             from mirai.agent.tools.editor import EditorTool
             from mirai.agent.tools.git import GitTool
+            from mirai.agent.tools.im import IMTool
             from mirai.agent.tools.shell import ShellTool
             from mirai.agent.tools.workspace import WorkspaceTool
 
@@ -236,6 +243,7 @@ class MiraiApp:
             )
 
             system_tool = SystemTool(context=context)
+            im_tool = IMTool(context=context)
             tools = [
                 EchoTool(context=context),
                 WorkspaceTool(context=context),
@@ -243,7 +251,9 @@ class MiraiApp:
                 EditorTool(context=context),
                 GitTool(context=context),
                 system_tool,
+                im_tool,
             ]
+            self._tool_context = context  # keep ref for im_provider wiring
             self.agent = await AgentLoop.create(
                 provider=provider,
                 tools=tools,
@@ -274,6 +284,7 @@ class MiraiApp:
             return
 
         im_provider = integrations.create_im_provider(config)
+        self._im_provider = im_provider  # stored for cron wiring
 
         if config.heartbeat.enabled:
             self.heartbeat = HeartbeatManager(
@@ -315,16 +326,14 @@ class MiraiApp:
     def _init_cron(self) -> None:
         """Initialize the cron scheduler with JSON5 file persistence.
 
-        Note: agent reference is wired later in create() after _init_agent_stack().
+        Note: agent and im_provider are wired later in create() after init.
         """
         state_dir = CONFIG_DIR / "state" / "cron"
         ensure_system_jobs(state_dir)
 
-        im_provider = getattr(self, "_im_provider", None)
         self.cron = CronScheduler(
             state_dir=state_dir,
             agent=None,  # wired after agent stack init
-            im_provider=im_provider,
         )
         self.cron.start()
         log.info("cron_scheduler_started", state_dir=str(state_dir))
