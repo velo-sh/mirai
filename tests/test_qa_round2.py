@@ -646,7 +646,7 @@ class TestQuotaManager:
         qm._last_update = time.time()
         qm._quotas = {"model-a": 50.0}
 
-        with patch("mirai.auth.antigravity_auth.fetch_usage") as mock_fetch:
+        with patch("mirai.agent.providers.quota.fetch_usage") as mock_fetch:
             await qm._maybe_refresh()
             mock_fetch.assert_not_called()
 
@@ -659,7 +659,7 @@ class TestQuotaManager:
         qm._last_update = time.time() - (qm.CACHE_TTL + 1)  # expired
 
         mock_usage = {"models": [{"id": "model-x", "used_pct": 42.0}]}
-        with patch("mirai.auth.antigravity_auth.fetch_usage", new_callable=AsyncMock, return_value=mock_usage):
+        with patch("mirai.agent.providers.quota.fetch_usage", new_callable=AsyncMock, return_value=mock_usage):
             await qm._maybe_refresh()
 
         assert qm._quotas == {"model-x": 42.0}
@@ -673,7 +673,7 @@ class TestQuotaManager:
         qm._quotas = {"model-a": 25.0}
         qm._last_update = time.time() - (qm.CACHE_TTL + 1)
 
-        with patch("mirai.auth.antigravity_auth.fetch_usage", new_callable=AsyncMock, side_effect=Exception("network")):
+        with patch("mirai.agent.providers.quota.fetch_usage", new_callable=AsyncMock, side_effect=Exception("network")):
             await qm._maybe_refresh()
 
         # Old quotas preserved (refresh failed silently)

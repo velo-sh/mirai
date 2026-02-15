@@ -32,8 +32,7 @@ def create_provider(
         ProviderError: If no valid credentials are found.
     """
     if provider == "antigravity":
-        from mirai.agent.providers.antigravity import AntigravityProvider
-        from mirai.auth.antigravity_auth import load_credentials
+        from mirai.agent.providers.antigravity import AntigravityProvider, load_credentials
 
         creds = load_credentials()
         if creds:

@@ -62,7 +62,10 @@ async def test_dreamer_short_response_safeguard():
     mock_agent.provider = AsyncMock()
 
     mock_storage = AsyncMock()
-    mock_storage.get_recent_traces.return_value = [{"trace_type": "thinking", "content": "reflect"}]
+    mock_trace = MagicMock()
+    mock_trace.trace_type = "thinking"
+    mock_trace.content = "reflect"
+    mock_storage.get_recent_traces.return_value = [mock_trace]
 
     # Mock a response that is too short (< 100 chars)
     mock_resp = MagicMock()
