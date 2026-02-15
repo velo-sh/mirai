@@ -38,13 +38,13 @@ async def test_heartbeat_proactive_insight_flow(duckdb_storage):
     traces = await l3.get_recent_traces(collaborator_id, limit=20)
 
     # Single-pass loop archives 'message' traces (user + assistant), not separate 'thinking'
-    message_traces = [t for t in traces if t["trace_type"] == "message"]
+    message_traces = [t for t in traces if t.trace_type == "message"]
 
     assistant_responses = []
     for t in traces:
-        if t["trace_type"] == "message":
+        if t.trace_type == "message":
             # DuckDB might return the JSON as a string or dict
-            meta = t["metadata_json"]
+            meta = t.metadata_json
             if isinstance(meta, str):
                 import json
 
@@ -54,7 +54,7 @@ async def test_heartbeat_proactive_insight_flow(duckdb_storage):
                 assistant_responses.append(t)
 
     assert len(message_traces) > 0, "No message trace found for heartbeat!"
-    assert any("completed the proactive scan" in t["content"] for t in assistant_responses), (
+    assert any("completed the proactive scan" in t.content for t in assistant_responses), (
         "No insight message found in L3!"
     )
 

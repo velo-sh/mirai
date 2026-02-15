@@ -50,9 +50,18 @@ async def test_memory_isolation_between_collaborators(tmp_path):
     mock_embedder = AsyncMock()
     mock_embedder.get_embeddings = AsyncMock(return_value=[0.1] * 1536)
 
+    from mirai.agent.tools.base import ToolContext
+
+    # Build ToolContext for Alice
+    alice_ctx_agent = AsyncMock()
+    alice_ctx_agent.l2_storage = isolated_l2
+    alice_ctx_config = AsyncMock()
+    alice_ctx_config.agent.collaborator_id = collab_a_id
+    alice_ctx = ToolContext(config=alice_ctx_config, agent_loop=alice_ctx_agent, storage=mock_l3)
+
     alice_agent = await AgentLoop.create(
         provider=provider,
-        tools=[MemorizeTool(collaborator_id=collab_a_id, vector_store=isolated_l2, l3_storage=mock_l3)],
+        tools=[MemorizeTool(context=alice_ctx)],
         collaborator_id=collab_a_id,
         l3_storage=mock_l3,
         l2_storage=isolated_l2,
@@ -67,9 +76,15 @@ async def test_memory_isolation_between_collaborators(tmp_path):
     await asyncio.sleep(1)  # Allow DB flush
 
     # 3. Bob tries to retrieve it
+    bob_ctx_agent = AsyncMock()
+    bob_ctx_agent.l2_storage = isolated_l2
+    bob_ctx_config = AsyncMock()
+    bob_ctx_config.agent.collaborator_id = collab_b_id
+    bob_ctx = ToolContext(config=bob_ctx_config, agent_loop=bob_ctx_agent, storage=mock_l3)
+
     bob_agent = await AgentLoop.create(
         provider=provider,
-        tools=[MemorizeTool(collaborator_id=collab_b_id, vector_store=isolated_l2, l3_storage=mock_l3)],
+        tools=[MemorizeTool(context=bob_ctx)],
         collaborator_id=collab_b_id,
         l3_storage=mock_l3,
         l2_storage=isolated_l2,
