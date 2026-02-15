@@ -34,15 +34,38 @@ if TYPE_CHECKING:
 
 
 def _get_auth_config() -> "AuthConfig":
-    """Lazily load AuthConfig from MiraiConfig, falling back to defaults."""
+    """Lazily load AuthConfig from MiraiConfig.
+
+    Priority:
+      1. Environment variables / config.toml (via MiraiConfig)
+      2. Saved credentials file (~/.mirai/antigravity_credentials.json)
+      3. Empty defaults (will fail on use if not set)
+    """
     try:
         from mirai.config import MiraiConfig
 
-        return MiraiConfig.load().auth
+        cfg = MiraiConfig.load().auth
     except Exception:
         from mirai.config import AuthConfig
 
-        return AuthConfig()
+        cfg = AuthConfig()
+
+    # If config doesn't have credentials, try loading from saved credential file
+    if not cfg.client_id or not cfg.client_secret:
+        saved = load_credentials()
+        if saved:
+            from mirai.config import AuthConfig
+
+            return AuthConfig(
+                client_id=saved.get("client_id", cfg.client_id),
+                client_secret=saved.get("client_secret", cfg.client_secret),
+                auth_url=cfg.auth_url,
+                token_url=cfg.token_url,
+                redirect_uri=cfg.redirect_uri,
+                code_assist_endpoints=cfg.code_assist_endpoints,
+            )
+
+    return cfg
 
 
 DEFAULT_PROJECT_ID = "rising-fact-p41fc"
@@ -249,11 +272,17 @@ async def fetch_user_email(access_token: str) -> str | None:
 
 
 def save_credentials(credentials: dict) -> None:
-    """Save credentials to ~/.mirai/antigravity_credentials.json."""
+    """Save credentials to ~/.mirai/antigravity_credentials.json.
+
+    The file is created with 0o600 (owner read/write only) permissions
+    to protect sensitive OAuth tokens and client secrets.
+    """
     CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Secure the directory itself
+    os.chmod(CREDENTIALS_PATH.parent, 0o700)
     CREDENTIALS_PATH.write_text(orjson.dumps(credentials, option=orjson.OPT_INDENT_2).decode())
     os.chmod(CREDENTIALS_PATH, 0o600)
-    print(f"Credentials saved to {CREDENTIALS_PATH}")
+    print(f"Credentials saved to {CREDENTIALS_PATH} (chmod 600)")
 
 
 def load_credentials() -> dict | None:
@@ -296,9 +325,10 @@ async def login() -> dict:
     5. Fetch projectId and email
     6. Save credentials to disk
     """
+    cfg = _get_auth_config()
     verifier, challenge = _generate_pkce()
     state = secrets.token_hex(16)
-    auth_url = _build_auth_url(challenge, state)
+    auth_url = _build_auth_url(challenge, state, auth_config=cfg)
 
     # Reset handler state
     _OAuthCallbackHandler.code = None
@@ -342,6 +372,8 @@ async def login() -> dict:
         **tokens,
         "project_id": project_id,
         "email": email,
+        "client_id": cfg.client_id,
+        "client_secret": cfg.client_secret,
     }
 
     save_credentials(credentials)
@@ -349,6 +381,7 @@ async def login() -> dict:
     print("\n✅ Antigravity OAuth complete!")
     print(f"   Email: {email or 'unknown'}")
     print(f"   Project: {project_id}")
+    print(f"   Credentials: {CREDENTIALS_PATH} (chmod 600)")
 
     return credentials
 
