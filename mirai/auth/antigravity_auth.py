@@ -83,13 +83,18 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _build_auth_url(challenge: str, state: str, auth_config: "AuthConfig | None" = None) -> str:
+def _build_auth_url(
+    challenge: str,
+    state: str,
+    auth_config: "AuthConfig | None" = None,
+    redirect_uri: str | None = None,
+) -> str:
     """Build the Google OAuth authorization URL."""
     cfg = auth_config or _get_auth_config()
     params = {
         "client_id": cfg.client_id,
         "response_type": "code",
-        "redirect_uri": cfg.redirect_uri,
+        "redirect_uri": redirect_uri or cfg.redirect_uri,
         "scope": " ".join(SCOPES),
         "code_challenge": challenge,
         "code_challenge_method": "S256",
@@ -105,6 +110,11 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
 
     code: str | None = None
     state: str | None = None
+
+    def setup(self):
+        """Set a socket timeout so empty preconnect connections don't block."""
+        self.request.settimeout(2)
+        super().setup()
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -127,7 +137,12 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         pass  # Suppress server logs
 
 
-async def exchange_code(code: str, verifier: str, auth_config: "AuthConfig | None" = None) -> dict:
+async def exchange_code(
+    code: str,
+    verifier: str,
+    auth_config: "AuthConfig | None" = None,
+    redirect_uri: str | None = None,
+) -> dict:
     """Exchange authorization code for access + refresh tokens."""
     cfg = auth_config or _get_auth_config()
     response = await _http.post(
@@ -137,7 +152,7 @@ async def exchange_code(code: str, verifier: str, auth_config: "AuthConfig | Non
             "client_secret": cfg.client_secret,
             "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": cfg.redirect_uri,
+            "redirect_uri": redirect_uri or cfg.redirect_uri,
             "code_verifier": verifier,
         },
     )
@@ -295,7 +310,7 @@ async def ensure_valid_credentials() -> dict:
 async def login(auth_config: "AuthConfig | None" = None) -> dict:
     """
     Run the full OAuth PKCE login flow:
-    1. Start local callback server on :51121
+    1. Start local callback server (dynamic port)
     2. Open Google sign-in in browser
     3. Wait for callback with auth code
     4. Exchange code for tokens
@@ -305,25 +320,20 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
     cfg = auth_config or _get_auth_config()
     verifier, challenge = _generate_pkce()
     state = secrets.token_hex(16)
-    auth_url = _build_auth_url(challenge, state, auth_config=cfg)
 
     # Reset handler state
     _OAuthCallbackHandler.code = None
     _OAuthCallbackHandler.state = None
 
-    # Start callback server.
-    # Browsers may open preconnect TCP connections that never send data.
-    # Without a timeout, handle() blocks on readline() → shutdown() deadlocks.
-    try:
-        server = HTTPServer(("127.0.0.1", 51121), _OAuthCallbackHandler)
-    except OSError as e:
-        if "Address already in use" in str(e):
-            raise RuntimeError(
-                "Port 51121 is already in use (a previous login may still be running). "
-                "Kill it with: lsof -ti :51121 | xargs kill"
-            ) from e
-        raise
-    server.timeout = 2  # seconds — drop idle preconnect sockets
+    # Bind to port 0 → OS assigns a free port. No hardcoded port conflicts.
+    # Google OAuth for desktop apps accepts any loopback port.
+    # The handler's setup() sets a 2-second socket timeout on each accepted
+    # connection, so empty browser preconnect sockets don't block handle().
+    server = HTTPServer(("127.0.0.1", 0), _OAuthCallbackHandler)
+    port = server.server_address[1]
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-callback"
+
+    auth_url = _build_auth_url(challenge, state, auth_config=cfg, redirect_uri=redirect_uri)
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 
@@ -349,7 +359,7 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
         raise ValueError("OAuth state mismatch. Please try again.")
 
     print("Exchanging code for tokens...")
-    tokens = await exchange_code(code, verifier)
+    tokens = await exchange_code(code, verifier, redirect_uri=redirect_uri)
 
     print("Fetching project ID...")
     project_id = await fetch_project_id(tokens["access"])
