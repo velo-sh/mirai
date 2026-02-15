@@ -160,7 +160,7 @@ class TestProviderFactory:
         from mirai.agent.providers.factory import create_provider
 
         # Patch load_credentials at its source module
-        with patch("mirai.auth.antigravity_auth.load_credentials", return_value=None):
+        with patch("mirai.agent.providers.antigravity.load_credentials", return_value=None):
             p = create_provider(provider="antigravity")
             assert isinstance(p, AnthropicProvider)
 
@@ -171,7 +171,7 @@ class TestProviderFactory:
         from mirai.agent.providers.factory import create_provider
         from mirai.errors import ProviderError
 
-        with patch("mirai.auth.antigravity_auth.load_credentials", return_value=None):
+        with patch("mirai.agent.providers.antigravity.load_credentials", return_value=None):
             with pytest.raises((ValueError, ProviderError), match="No API credentials"):
                 create_provider(provider="antigravity")
 

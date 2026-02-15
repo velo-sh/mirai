@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import orjson
 
 from mirai.agent.tools.base import BaseTool, ToolContext
+from mirai.auth.antigravity_auth import fetch_usage
 from mirai.logging import get_logger
 
 if TYPE_CHECKING:
@@ -345,8 +346,6 @@ class SystemTool(BaseTool):
 
             if not token:
                 return "Error: No access token available."
-
-            from mirai.auth.antigravity_auth import fetch_usage
 
             data = await fetch_usage(token, project_id)
             log.info("usage_fetched", models_count=len(data.get("models", [])))

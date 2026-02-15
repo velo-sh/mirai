@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from mirai.agent.providers.antigravity import AntigravityProvider
 from mirai.agent.tools.system import SystemTool, _serialize_toml
 
 # ---------------------------------------------------------------------------
@@ -186,10 +187,15 @@ class TestSerializeToml:
 # ---------------------------------------------------------------------------
 
 
-class _FakeProvider:
-    """Minimal provider with credentials for testing _usage."""
+class _FakeProvider(AntigravityProvider):
+    """Minimal provider with credentials for testing _usage.
+
+    Subclasses AntigravityProvider so isinstance() checks pass,
+    but bypasses the real __init__ to avoid credential loading.
+    """
 
     def __init__(self, credentials: dict | None = None):
+        # Skip AntigravityProvider.__init__ — set only what tests need.
         self.credentials = credentials or {
             "access": "fake-token-123",
             "refresh": "fake-refresh",
@@ -219,7 +225,7 @@ class TestSystemToolUsage:
         provider = _FakeProvider()
         tool = SystemTool(config=_FakeConfig(), provider=provider)
 
-        with patch("mirai.auth.antigravity_auth.fetch_usage", return_value=fake_usage):
+        with patch("mirai.agent.tools.system.fetch_usage", return_value=fake_usage):
             result = await tool.execute(action="usage")
 
         data = json.loads(result)
@@ -255,7 +261,7 @@ class TestSystemToolUsage:
         provider = _FakeProvider()
         tool = SystemTool(config=_FakeConfig(), provider=provider)
 
-        with patch("mirai.auth.antigravity_auth.fetch_usage", side_effect=Exception("network timeout")):
+        with patch("mirai.agent.tools.system.fetch_usage", side_effect=Exception("network timeout")):
             result = await tool.execute(action="usage")
 
         assert "Error" in result

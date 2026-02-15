@@ -11,10 +11,8 @@ Test categories:
   8. Edge cases — empty catalogs, provider without methods, etc.
 """
 
-import asyncio
 import time
 from dataclasses import asdict
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,24 +26,28 @@ from mirai.agent.providers.base import ModelInfo, ProviderProtocol, UsageSnapsho
 @pytest.fixture
 def mock_provider():
     from tests.mocks.providers import MockProvider
+
     return MockProvider()
 
 
 @pytest.fixture
 def openai_provider():
     from mirai.agent.providers.openai import OpenAIProvider
+
     return OpenAIProvider(api_key="test-key", model="gpt-4o")
 
 
 @pytest.fixture
 def anthropic_provider():
     from mirai.agent.providers.anthropic import AnthropicProvider
+
     return AnthropicProvider(api_key="test-key")
 
 
 @pytest.fixture
 def minimax_provider():
     from mirai.agent.providers.minimax import MiniMaxProvider
+
     return MiniMaxProvider(api_key="test-key")
 
 
@@ -188,8 +190,11 @@ class TestProviderProtocolExtended:
 
     def test_antigravity_provider_has_new_methods(self):
         """AntigravityProvider should also satisfy the protocol."""
-        with patch("mirai.auth.antigravity_auth.load_credentials", return_value={"token": "t", "expires": 9999999999}):
+        with patch(
+            "mirai.agent.providers.antigravity.load_credentials", return_value={"token": "t", "expires": 9999999999}
+        ):
             from mirai.agent.providers.antigravity import AntigravityProvider
+
             p = AntigravityProvider()
             assert hasattr(p, "provider_name")
             assert hasattr(p, "list_models")
@@ -215,8 +220,11 @@ class TestProviderName:
         assert minimax_provider.provider_name == "minimax"
 
     def test_antigravity(self):
-        with patch("mirai.auth.antigravity_auth.load_credentials", return_value={"token": "t", "expires": 9999999999}):
+        with patch(
+            "mirai.agent.providers.antigravity.load_credentials", return_value={"token": "t", "expires": 9999999999}
+        ):
             from mirai.agent.providers.antigravity import AntigravityProvider
+
             assert AntigravityProvider().provider_name == "antigravity"
 
     def test_provider_name_is_string(self, mock_provider, openai_provider, minimax_provider):
@@ -405,58 +413,72 @@ class TestMiniMaxHelpers:
 
     def test_pick_number_first_key(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"used": 42, "total": 100}, ["used", "usage"]) == 42.0
 
     def test_pick_number_second_key(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"usage": 99}, ["used", "usage"]) == 99.0
 
     def test_pick_number_string_value(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"used": "42.5"}, ["used"]) == 42.5
 
     def test_pick_number_invalid_string(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"used": "not-a-number"}, ["used"]) is None
 
     def test_pick_number_missing_keys(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"foo": 1}, ["used", "usage"]) is None
 
     def test_pick_number_empty_record(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({}, ["used"]) is None
 
     def test_pick_number_zero(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"used": 0}, ["used"]) == 0.0
 
     def test_pick_number_float(self):
         from mirai.agent.providers.minimax import _pick_number
+
         assert _pick_number({"used": 3.14}, ["used"]) == 3.14
 
     def test_pick_string_first_key(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"plan": "pro"}, ["plan", "tier"]) == "pro"
 
     def test_pick_string_second_key(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"tier": "enterprise"}, ["plan", "tier"]) == "enterprise"
 
     def test_pick_string_empty_value(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"plan": "  "}, ["plan"]) is None
 
     def test_pick_string_missing_key(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"foo": "bar"}, ["plan"]) is None
 
     def test_pick_string_non_string_value(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"plan": 123}, ["plan"]) is None
 
     def test_pick_string_strips_whitespace(self):
         from mirai.agent.providers.minimax import _pick_string
+
         assert _pick_string({"plan": "  pro  "}, ["plan"]) == "pro"
 
 
@@ -468,6 +490,7 @@ class TestMiniMaxGetUsage:
 
     def _make_provider(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         return MiniMaxProvider(api_key="test-key")
 
     @pytest.mark.asyncio
@@ -642,15 +665,16 @@ class TestModelEndpoint:
 
     @pytest.fixture
     def endpoint_client(self):
-        from starlette.testclient import TestClient
         from fastapi import FastAPI
+        from starlette.testclient import TestClient
+
         import main as main_module
 
         saved = main_module._mirai
 
         # Build a MiraiApp with real MockProvider
-        from tests.mocks.providers import MockProvider
         from mirai.bootstrap import MiraiApp
+        from tests.mocks.providers import MockProvider
 
         mirai_app = MiraiApp()
         agent = MagicMock()
@@ -670,13 +694,15 @@ class TestModelEndpoint:
 
     @pytest.fixture
     def no_provider_client(self):
-        from starlette.testclient import TestClient
         from fastapi import FastAPI
+        from starlette.testclient import TestClient
+
         import main as main_module
 
         saved = main_module._mirai
 
         from mirai.bootstrap import MiraiApp
+
         mirai_app = MiraiApp()
         mirai_app.agent = None
         mirai_app.start_time = time.monotonic()
@@ -746,35 +772,42 @@ class TestMiniMaxDefaults:
 
     def test_default_model(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         assert MiniMaxProvider.DEFAULT_MODEL == "MiniMax-M2.5"
 
     def test_default_base_url(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         assert "minimaxi.com" in MiniMaxProvider.DEFAULT_BASE_URL
 
     def test_catalog_is_class_level(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         assert len(MiniMaxProvider.MODEL_CATALOG) == 5
 
     def test_all_catalog_models_have_context_window(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         for m in MiniMaxProvider.MODEL_CATALOG:
             assert m.context_window is not None
             assert m.context_window > 0
 
     def test_all_catalog_models_have_max_output_tokens(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         for m in MiniMaxProvider.MODEL_CATALOG:
             assert m.max_output_tokens is not None
             assert m.max_output_tokens > 0
 
     def test_all_catalog_models_have_description(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         for m in MiniMaxProvider.MODEL_CATALOG:
             assert m.description is not None
 
     def test_all_catalog_models_have_pricing(self):
         from mirai.agent.providers.minimax import MiniMaxProvider
+
         for m in MiniMaxProvider.MODEL_CATALOG:
             assert m.input_price is not None
             assert m.output_price is not None
