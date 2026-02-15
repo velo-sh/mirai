@@ -50,6 +50,8 @@ def _reset_label(iso_ts: str | None) -> str:
 
 async def cmd_login():
     """Run the OAuth login flow."""
+    from mirai.config import AuthConfig
+
     existing = load_credentials()
     if existing:
         print(f"Existing credentials found for: {existing.get('email', 'unknown')}")
@@ -58,7 +60,9 @@ async def cmd_login():
             print("Keeping existing credentials.")
             return
     try:
-        await login()
+        # Use AuthConfig() directly to avoid MiraiConfig.load() which
+        # triggers noisy provider warnings irrelevant to login.
+        await login(auth_config=AuthConfig())
     except KeyboardInterrupt:
         print("\nLogin cancelled.")
         sys.exit(1)

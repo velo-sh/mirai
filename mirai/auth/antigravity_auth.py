@@ -314,7 +314,15 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
     # Start callback server.
     # Browsers may open preconnect TCP connections that never send data.
     # Without a timeout, handle() blocks on readline() → shutdown() deadlocks.
-    server = HTTPServer(("127.0.0.1", 51121), _OAuthCallbackHandler)
+    try:
+        server = HTTPServer(("127.0.0.1", 51121), _OAuthCallbackHandler)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            raise RuntimeError(
+                "Port 51121 is already in use (a previous login may still be running). "
+                "Kill it with: lsof -ti :51121 | xargs kill"
+            ) from e
+        raise
     server.timeout = 2  # seconds — drop idle preconnect sockets
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -353,8 +361,6 @@ async def login(auth_config: "AuthConfig | None" = None) -> dict:
         **tokens,
         "project_id": project_id,
         "email": email,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
     }
 
     save_credentials(credentials)
