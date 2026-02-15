@@ -1,6 +1,6 @@
-"""E2E tests for SystemTool cron actions — list_cron_jobs, add_cron_job, remove_cron_job.
+"""E2E tests for CronTool — list_cron_jobs, add_cron_job, remove_cron_job.
 
-Tests exercise the full path: SystemTool.execute() → _list/_add/_remove → CronScheduler
+Tests exercise the full path: CronTool.execute() → _list/_add/_remove → CronScheduler
 with a real CronScheduler backed by a temp directory and JSON5 files on disk.
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from mirai.agent.tools.base import ToolContext
-from mirai.agent.tools.system import SystemTool
+from mirai.agent.tools.cron_tool import CronTool
 from mirai.cron import CronScheduler, _save_json5_atomic
 
 # ---------------------------------------------------------------------------
@@ -33,8 +33,8 @@ class _FakeConfig:
     heartbeat = _Heartbeat()
 
 
-def _make_tool(tmp_path: Path, system_jobs: list | None = None, agent_jobs: list | None = None) -> SystemTool:
-    """Build a SystemTool wired to a real CronScheduler in tmp_path."""
+def _make_tool(tmp_path: Path, system_jobs: list | None = None, agent_jobs: list | None = None) -> CronTool:
+    """Build a CronTool wired to a real CronScheduler in tmp_path."""
     state_dir = tmp_path / "cron"
     state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +50,7 @@ def _make_tool(tmp_path: Path, system_jobs: list | None = None, agent_jobs: list
         cron_scheduler=sched,
         start_time=0.0,
     )
-    return SystemTool(context=ctx)
+    return CronTool(context=ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ class TestListCronJobs:
     async def test_list_without_scheduler(self):
         """Should return error when cron_scheduler is None."""
         ctx = ToolContext(config=_FakeConfig(), cron_scheduler=None, start_time=0.0)
-        tool = SystemTool(context=ctx)
+        tool = CronTool(context=ctx)
         result = await tool.execute(action="list_cron_jobs")
         assert "Error" in result
         assert "not available" in result
@@ -353,7 +353,7 @@ class TestAddCronJob:
     async def test_add_without_scheduler(self):
         """Should return error when cron_scheduler is None."""
         ctx = ToolContext(config=_FakeConfig(), cron_scheduler=None, start_time=0.0)
-        tool = SystemTool(context=ctx)
+        tool = CronTool(context=ctx)
         result = await tool.execute(
             action="add_cron_job",
             cron_job={
@@ -493,7 +493,7 @@ class TestRemoveCronJob:
     async def test_remove_without_scheduler(self):
         """Should return error when cron_scheduler is None."""
         ctx = ToolContext(config=_FakeConfig(), cron_scheduler=None, start_time=0.0)
-        tool = SystemTool(context=ctx)
+        tool = CronTool(context=ctx)
         result = await tool.execute(action="remove_cron_job", job_id="x")
         assert "Error" in result
         assert "not available" in result
@@ -630,7 +630,7 @@ class TestCronE2EWorkflow:
     @pytest.mark.asyncio
     async def test_definition_includes_cron_actions(self):
         """Tool definition should advertise all cron actions."""
-        tool = SystemTool()
+        tool = CronTool()
         defn = tool.definition
         actions = defn["input_schema"]["properties"]["action"]["enum"]
         assert "list_cron_jobs" in actions

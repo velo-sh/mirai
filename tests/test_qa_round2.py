@@ -23,6 +23,8 @@ from mirai.agent.providers.openai import OpenAIProvider
 from mirai.agent.providers.quota import QuotaManager
 from mirai.agent.registry import ModelRegistry
 from mirai.agent.registry_models import RegistryData
+from mirai.agent.tools.base import ToolContext
+from mirai.agent.tools.model import ModelTool
 from mirai.agent.tools.system import SystemTool
 from mirai.bootstrap import _wait_for_duckdb_lock
 from mirai.config import MiraiConfig
@@ -170,7 +172,8 @@ class TestQuotaDataWiringEdgeCases:
         """Provider with no quota_manager → quota_data is None, catalog renders without annotations."""
 
         mock_provider = MagicMock(spec=[])  # no attributes at all
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "MiniMax-M2.5" in result
@@ -180,7 +183,8 @@ class TestQuotaDataWiringEdgeCases:
     async def test_no_provider_at_all(self, registry):
         """When provider is None, quota_data is None → catalog renders normally."""
 
-        tool = SystemTool(registry=registry, provider=None)
+        ctx = ToolContext(registry=registry)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "MiniMax-M2.5" in result
@@ -197,7 +201,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "80%" in result
@@ -213,7 +218,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "79%" not in result
@@ -230,7 +236,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "exhausted" in result
@@ -246,7 +253,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         # Should NOT raise — returns catalog with stale quota data
         result = await tool._list_models()
         assert "MiniMax-M2.5" in result
@@ -262,7 +270,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         assert "exhausted" not in result
@@ -279,7 +288,8 @@ class TestQuotaDataWiringEdgeCases:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         # Should succeed without errors, and not annotate known models
@@ -725,7 +735,8 @@ class TestListModelsDispatch:
             ),
         )
 
-        tool = SystemTool(registry=reg)
+        ctx = ToolContext(registry=reg)
+        tool = ModelTool(context=ctx)
         result = await tool.execute(action="list_models")
 
         assert isinstance(result, str)
@@ -753,7 +764,8 @@ class TestListModelsDispatch:
             ),
         )
 
-        tool = SystemTool(registry=reg)
+        ctx = ToolContext(registry=reg)
+        tool = ModelTool(context=ctx)
         result = await tool.execute(action="list_models")
 
         assert "minimax" in result.lower()

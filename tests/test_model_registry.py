@@ -339,15 +339,17 @@ class TestConcurrency:
 
 
 class TestToolIntegration:
-    """T5: list_models action via SystemTool."""
+    """T5: list_models action via ModelTool."""
 
     @pytest.mark.asyncio
     async def test_t5_1_list_models_returns_catalog(self, tmp_registry_path: Path, sample_registry_data: dict):
-        """T5.1: mirai_system(action='list_models') returns formatted table."""
-        from mirai.agent.tools.system import SystemTool
+        """T5.1: mirai_model(action='list_models') returns formatted table."""
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
-        tool = SystemTool(registry=registry)
+        ctx = ToolContext(registry=registry)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
         assert "minimax" in result.lower()
         assert "MiniMax-M2.5" in result
@@ -367,17 +369,18 @@ class TestToolIntegration:
 
     @pytest.mark.asyncio
     async def test_t5_no_registry(self):
-        """SystemTool with no registry returns error."""
-        from mirai.agent.tools.system import SystemTool
+        """ModelTool with no registry returns error."""
+        from mirai.agent.tools.model import ModelTool
 
-        tool = SystemTool()
+        tool = ModelTool()
         result = await tool._list_models()
         assert "Error" in result
 
     @pytest.mark.asyncio
     async def test_t5_quota_data_wired(self, tmp_registry_path: Path, sample_registry_data: dict):
         """Quota data from QuotaManager is passed to get_catalog_text."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         registry = _make_registry_from_data(tmp_registry_path, sample_registry_data)
 
@@ -389,7 +392,8 @@ class TestToolIntegration:
         mock_provider = MagicMock()
         mock_provider.quota_manager = mock_qm
 
-        tool = SystemTool(registry=registry, provider=mock_provider)
+        ctx = ToolContext(registry=registry, provider=mock_provider)
+        tool = ModelTool(context=ctx)
         result = await tool._list_models()
 
         # Exhausted model should be annotated
@@ -468,7 +472,8 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s1_switch_valid_model(self, switching_registry):
         """S1: Switch to valid model → provider swapped, registry updated."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         mock_new_provider = MagicMock()
         mock_new_provider.provider_name = "anthropic"
@@ -476,7 +481,8 @@ class TestModelSwitching:
 
         mock_agent_loop = MagicMock()
 
-        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+        ctx = ToolContext(registry=switching_registry, agent_loop=mock_agent_loop)
+        tool = ModelTool(context=ctx)
 
         with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider):
             result = await tool._set_active_model("claude-sonnet-4-20250514")
@@ -490,10 +496,12 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s2_switch_unknown_model(self, switching_registry):
         """S2: Switch to unknown model → error, no change."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         mock_agent_loop = MagicMock()
-        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+        ctx = ToolContext(registry=switching_registry, agent_loop=mock_agent_loop)
+        tool = ModelTool(context=ctx)
 
         result = await tool._set_active_model("nonexistent-model")
 
@@ -506,10 +514,12 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s3_switch_already_active(self, switching_registry):
         """S3: Switch to already-active model → no-op message."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         mock_agent_loop = MagicMock()
-        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+        ctx = ToolContext(registry=switching_registry, agent_loop=mock_agent_loop)
+        tool = ModelTool(context=ctx)
 
         result = await tool._set_active_model("MiniMax-M2.5")
 
@@ -538,13 +548,15 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s5_registry_persisted_after_switch(self, switching_registry, tmp_registry_path: Path):
         """S5: Registry persists after switch → survives restart."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
         mock_new_provider = MagicMock()
         mock_new_provider.provider_name = "anthropic"
         mock_agent_loop = MagicMock()
 
-        tool = SystemTool(registry=switching_registry, agent_loop=mock_agent_loop)
+        ctx = ToolContext(registry=switching_registry, agent_loop=mock_agent_loop)
+        tool = ModelTool(context=ctx)
 
         with patch("mirai.agent.providers.factory.create_provider", return_value=mock_new_provider):
             await tool._set_active_model("claude-sonnet-4-20250514")
@@ -557,9 +569,11 @@ class TestModelSwitching:
     @pytest.mark.asyncio
     async def test_s_no_model_param(self, switching_registry):
         """set_active_model with no model → error."""
-        from mirai.agent.tools.system import SystemTool
+        from mirai.agent.tools.base import ToolContext
+        from mirai.agent.tools.model import ModelTool
 
-        tool = SystemTool(registry=switching_registry)
+        ctx = ToolContext(registry=switching_registry)
+        tool = ModelTool(context=ctx)
         result = await tool._set_active_model(None)
         assert "Error" in result
         assert "'model' parameter is required" in result

@@ -162,6 +162,138 @@ def _save_json5_atomic(path: Path, data: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CronStore — data ownership and persistence
+# ---------------------------------------------------------------------------
+
+
+class CronStore:
+    """Owns cron job data and JSON5 file persistence.
+
+    Responsibilities:
+      - File paths and mtime tracking
+      - In-memory job lists (system + agent)
+      - Load / save / hot-reload from disk
+      - Startup recovery and schedule computation
+    """
+
+    def __init__(self, state_dir: Path) -> None:
+        self.state_dir = Path(state_dir)
+        self._system_path = self.state_dir / "system.json5"
+        self._jobs_path = self.state_dir / "jobs.json5"
+
+        # In-memory job lists
+        self.system_jobs: list[dict[str, Any]] = []
+        self.agent_jobs: list[dict[str, Any]] = []
+
+        # Mtime tracking for hot-reload
+        self._last_mtime: float = 0.0
+        self._system_mtime: float = 0.0
+
+    @property
+    def jobs_path(self) -> Path:
+        """Path to agent jobs file (for tests / external access)."""
+        return self._jobs_path
+
+    @property
+    def all_jobs(self) -> list[dict[str, Any]]:
+        """Combined list of system + agent jobs."""
+        return self.system_jobs + self.agent_jobs
+
+    def load(self) -> None:
+        """Load both system and agent job stores from disk."""
+        sys_data = _load_json5(self._system_path)
+        self.system_jobs = sys_data.get("jobs", [])
+        if self._system_path.exists():
+            self._system_mtime = self._system_path.stat().st_mtime
+
+        agent_data = _load_json5(self._jobs_path)
+        self.agent_jobs = agent_data.get("jobs", [])
+        if self._jobs_path.exists():
+            self._last_mtime = self._jobs_path.stat().st_mtime
+
+        total = len(self.system_jobs) + len(self.agent_jobs)
+        log.info(
+            "cron_stores_loaded",
+            system_jobs=len(self.system_jobs),
+            agent_jobs=len(self.agent_jobs),
+            total=total,
+        )
+
+    def save_agent_jobs(self) -> None:
+        """Persist agent jobs to disk (system.json5 is never written at runtime)."""
+        data: dict[str, Any] = {"version": 1, "jobs": self.agent_jobs}
+        _save_json5_atomic(self._jobs_path, data)
+        self._last_mtime = self._jobs_path.stat().st_mtime
+
+    def maybe_reload(self) -> bool:
+        """Reload from disk if files have been externally edited.
+
+        Returns True if any file was reloaded.
+        """
+        reloaded = False
+
+        if self._jobs_path.exists():
+            mtime = self._jobs_path.stat().st_mtime
+            if mtime != self._last_mtime:
+                agent_data = _load_json5(self._jobs_path)
+                self.agent_jobs = agent_data.get("jobs", [])
+                self._last_mtime = mtime
+                reloaded = True
+                log.info("cron_agent_jobs_reloaded")
+
+        if self._system_path.exists():
+            mtime = self._system_path.stat().st_mtime
+            if mtime != self._system_mtime:
+                sys_data = _load_json5(self._system_path)
+                self.system_jobs = sys_data.get("jobs", [])
+                self._system_mtime = mtime
+                reloaded = True
+                log.info("cron_system_jobs_reloaded")
+
+        if reloaded:
+            self.ensure_next_runs()
+
+        return reloaded
+
+    def startup_recovery(self) -> None:
+        """Recompute nextRunAtMs for all jobs; recover missed ones."""
+        now = _now_ms()
+        grace = MISSED_GRACE_SECONDS * 1000
+
+        for job in self.all_jobs:
+            if not job.get("enabled", True):
+                continue
+            state = job.setdefault("state", {})
+            next_run = state.get("nextRunAtMs")
+
+            if next_run is None:
+                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
+                if computed:
+                    state["nextRunAtMs"] = computed
+            elif next_run < now - grace:
+                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
+                if computed:
+                    state["nextRunAtMs"] = computed
+                    log.info("cron_job_skip_stale", job_id=job["id"])
+            elif next_run < now:
+                log.info("cron_job_missed_recovery", job_id=job["id"])
+
+        self.save_agent_jobs()
+
+    def ensure_next_runs(self) -> None:
+        """Ensure all enabled jobs have a nextRunAtMs."""
+        now = _now_ms()
+        for job in self.all_jobs:
+            if not job.get("enabled", True):
+                continue
+            state = job.setdefault("state", {})
+            if state.get("nextRunAtMs") is None:
+                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
+                if computed:
+                    state["nextRunAtMs"] = computed
+
+
+# ---------------------------------------------------------------------------
 # CronScheduler
 # ---------------------------------------------------------------------------
 
@@ -181,9 +313,7 @@ class CronScheduler:
     Uses ``asyncio`` timers armed to the next due job instead of fixed-interval
     polling.  Falls back to a 60-second cap to guard against drift.
 
-    Loads two job files:
-    - ``system.json5`` — bootstrap-managed, agent read-only
-    - ``jobs.json5``   — agent-editable
+    Delegates data persistence to :class:`CronStore`.
     """
 
     def __init__(
@@ -195,14 +325,8 @@ class CronScheduler:
         self.agent = agent
         self.im_provider: Any = None  # injected by bootstrap for curator alerts only
 
-        self._system_path = self.state_dir / "system.json5"
-        self._jobs_path = self.state_dir / "jobs.json5"
-
-        # In-memory merged list (system + agent jobs)
-        self._system_jobs: list[dict[str, Any]] = []
-        self._agent_jobs: list[dict[str, Any]] = []
-        self._last_mtime: float = 0.0
-        self._system_mtime: float = 0.0
+        # Delegate data ownership to CronStore
+        self.store = CronStore(state_dir)
 
         # Concurrency tracking
         self._running: dict[str, _RunningJob] = {}
@@ -211,6 +335,27 @@ class CronScheduler:
         self._timer_handle: asyncio.TimerHandle | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stopped = False
+
+    # Backward-compatible property aliases
+    @property
+    def _system_jobs(self) -> list[dict[str, Any]]:
+        return self.store.system_jobs
+
+    @_system_jobs.setter
+    def _system_jobs(self, value: list[dict[str, Any]]) -> None:
+        self.store.system_jobs = value
+
+    @property
+    def _agent_jobs(self) -> list[dict[str, Any]]:
+        return self.store.agent_jobs
+
+    @_agent_jobs.setter
+    def _agent_jobs(self, value: list[dict[str, Any]]) -> None:
+        self.store.agent_jobs = value
+
+    @property
+    def _jobs_path(self) -> Path:
+        return self.store.jobs_path
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -221,12 +366,12 @@ class CronScheduler:
         self._loop = loop or asyncio.get_running_loop()
         self._stopped = False
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self._load_stores()
-        self._startup_recovery()
+        self.store.load()
+        self.store.startup_recovery()
         self._arm_timer()
         log.info(
             "CronScheduler_started",
-            jobs=len(self._system_jobs) + len(self._agent_jobs),
+            jobs=len(self.store.all_jobs),
             next_wake_ms=self._next_wake_ms(),
         )
 
@@ -245,7 +390,7 @@ class CronScheduler:
     def _next_wake_ms(self) -> int | None:
         """Earliest ``nextRunAtMs`` across all enabled jobs, or *None*."""
         earliest: int | None = None
-        for job in self._system_jobs + self._agent_jobs:
+        for job in self.store.all_jobs:
             if not job.get("enabled", True):
                 continue
             nr = job.get("state", {}).get("nextRunAtMs")
@@ -285,17 +430,16 @@ class CronScheduler:
 
         try:
             # 1. Detect external file edits
-            self._maybe_reload()
+            self.store.maybe_reload()
 
             # 2. Reap completed running jobs
             self._reap_finished()
 
             # 3. Find and fire due jobs
             now = _now_ms()
-            all_jobs = self._system_jobs + self._agent_jobs
             fired_any = False
 
-            for job in all_jobs:
+            for job in self.store.all_jobs:
                 if not job.get("enabled", True):
                     continue
 
@@ -320,7 +464,7 @@ class CronScheduler:
 
             # 4. Persist if anything changed
             if fired_any:
-                self._save_agent_jobs()
+                self.store.save_agent_jobs()
         except Exception as exc:
             log.error("cron_timer_tick_failed", error=str(exc))
         finally:
@@ -411,111 +555,22 @@ class CronScheduler:
             self._running.pop(job_id, None)
 
             # Persist immediately after job completes
-            self._save_agent_jobs()
+            self.store.save_agent_jobs()
 
             # Re-arm timer in case next-run changed
             self._arm_timer()
 
     # ------------------------------------------------------------------
-    # Store management
+    # Backward-compatible shims (delegate to CronStore)
     # ------------------------------------------------------------------
 
     def _load_stores(self) -> None:
-        """Load both system and agent job stores from disk."""
-        sys_data = _load_json5(self._system_path)
-        self._system_jobs = sys_data.get("jobs", [])
-        if self._system_path.exists():
-            self._system_mtime = self._system_path.stat().st_mtime
-
-        agent_data = _load_json5(self._jobs_path)
-        self._agent_jobs = agent_data.get("jobs", [])
-        if self._jobs_path.exists():
-            self._last_mtime = self._jobs_path.stat().st_mtime
-
-        total = len(self._system_jobs) + len(self._agent_jobs)
-        log.info(
-            "cron_stores_loaded",
-            system_jobs=len(self._system_jobs),
-            agent_jobs=len(self._agent_jobs),
-            total=total,
-        )
-
-    def _maybe_reload(self) -> None:
-        """Reload from disk if files have been externally edited."""
-        reloaded = False
-
-        if self._jobs_path.exists():
-            mtime = self._jobs_path.stat().st_mtime
-            if mtime != self._last_mtime:
-                agent_data = _load_json5(self._jobs_path)
-                self._agent_jobs = agent_data.get("jobs", [])
-                self._last_mtime = mtime
-                reloaded = True
-                log.info("cron_agent_jobs_reloaded")
-
-        if self._system_path.exists():
-            mtime = self._system_path.stat().st_mtime
-            if mtime != self._system_mtime:
-                sys_data = _load_json5(self._system_path)
-                self._system_jobs = sys_data.get("jobs", [])
-                self._system_mtime = mtime
-                reloaded = True
-                log.info("cron_system_jobs_reloaded")
-
-        if reloaded:
-            # Recompute next-run for newly loaded jobs that lack it
-            self._ensure_next_runs()
+        """Shim — delegates to ``self.store.load()``."""
+        self.store.load()
 
     def _save_agent_jobs(self) -> None:
-        """Persist agent jobs to disk (system.json5 is never written at runtime)."""
-        data: dict[str, Any] = {"version": 1, "jobs": self._agent_jobs}
-        _save_json5_atomic(self._jobs_path, data)
-        self._last_mtime = self._jobs_path.stat().st_mtime
-
-    # ------------------------------------------------------------------
-    # Startup recovery
-    # ------------------------------------------------------------------
-
-    def _startup_recovery(self) -> None:
-        """Recompute nextRunAtMs for all jobs; recover missed ones."""
-        now = _now_ms()
-        grace = MISSED_GRACE_SECONDS * 1000
-
-        for job in self._system_jobs + self._agent_jobs:
-            if not job.get("enabled", True):
-                continue
-            state = job.setdefault("state", {})
-            next_run = state.get("nextRunAtMs")
-
-            if next_run is None:
-                # Never scheduled — compute initial
-                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
-                if computed:
-                    state["nextRunAtMs"] = computed
-            elif next_run < now - grace:
-                # Missed by more than grace period — skip, advance
-                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
-                if computed:
-                    state["nextRunAtMs"] = computed
-                    log.info("cron_job_skip_stale", job_id=job["id"])
-            elif next_run < now:
-                # Missed within grace — fire immediately (keep nextRunAtMs as-is)
-                log.info("cron_job_missed_recovery", job_id=job["id"])
-                # nextRunAtMs stays in the past so tick() picks it up
-
-        self._save_agent_jobs()
-
-    def _ensure_next_runs(self) -> None:
-        """Ensure all enabled jobs have a nextRunAtMs."""
-        now = _now_ms()
-        for job in self._system_jobs + self._agent_jobs:
-            if not job.get("enabled", True):
-                continue
-            state = job.setdefault("state", {})
-            if state.get("nextRunAtMs") is None:
-                computed = compute_next_run(job.get("schedule", {}), after_ms=now)
-                if computed:
-                    state["nextRunAtMs"] = computed
+        """Shim — delegates to ``self.store.save_agent_jobs()``."""
+        self.store.save_agent_jobs()
 
     # ------------------------------------------------------------------
     # Concurrency management
