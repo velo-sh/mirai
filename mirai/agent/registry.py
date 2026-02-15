@@ -263,167 +263,21 @@ class ModelRegistry:
         so slow external APIs never block discovery.
         """
 
-        # ------------------------------------------------------------------
         # Phase 1: Scan providers + fetch enrichment data concurrently
-        # ------------------------------------------------------------------
-        async def _scan_providers() -> dict[str, RegistryProviderData]:
-            result: dict[str, RegistryProviderData] = {}
-            all_specs = _build_provider_specs()
-            for spec in all_specs:
-                api_key = os.getenv(spec.env_key)
-                if not api_key:
-                    existing = self._data.providers.get(spec.name)
-                    result[spec.name] = RegistryProviderData(
-                        available=False,
-                        env_key=spec.env_key,
-                        models=existing.models if existing else [],
-                    )
-                    continue
-
-                try:
-                    cls = _import_provider_class(spec.import_path)
-                    if cls is None:
-                        continue
-
-                    # Pass base_url and provider_name for free providers
-                    init_kwargs: dict[str, Any] = {"api_key": api_key}
-                    if spec.base_url:
-                        init_kwargs["base_url"] = spec.base_url
-                        init_kwargs["provider_name"] = spec.name
-                    provider = cls(**init_kwargs)
-                    raw_models = await provider.list_models()
-                    models = [RegistryModelEntry.from_model_info(m) for m in raw_models]
-                    result[spec.name] = RegistryProviderData(
-                        available=True,
-                        env_key=spec.env_key,
-                        models=models,
-                    )
-                    log.info("registry_provider_refreshed", provider=spec.name, model_count=len(models))
-                except Exception as exc:
-                    log.warning("registry_refresh_failed", provider=spec.name, error=str(exc))
-                    existing = self._data.providers.get(spec.name)
-                    result[spec.name] = (
-                        existing
-                        if existing
-                        else RegistryProviderData(
-                            available=False,
-                            env_key=spec.env_key,
-                            models=[],
-                        )
-                    )
-            return result
-
-        async def _fetch_enrichment() -> dict[str, Any]:
-            if self._enrichment_source is None:
-                return {}
-            try:
-                return await asyncio.wait_for(
-                    self._enrichment_source.fetch(),
-                    timeout=20,
-                )
-            except TimeoutError:
-                log.warning("enrichment_fetch_timeout")
-                return {}
-            except Exception as exc:
-                log.warning("enrichment_fetch_failed", error=str(exc))
-                return {}
-
-        async def _fetch_free_models() -> dict[str, FreeProviderData]:
-            if self._free_source is None:
-                return {}
-            try:
-                return await asyncio.wait_for(
-                    self._free_source.fetch(),
-                    timeout=20,
-                )
-            except TimeoutError:
-                log.warning("free_provider_fetch_timeout")
-                return {}
-            except Exception as exc:
-                log.warning("free_provider_fetch_failed", error=str(exc))
-                return {}
-
-        # Run all three concurrently — enrichment/free never block provider scanning
         new_providers, enrichment_data, free_data = await asyncio.gather(
-            _scan_providers(),
-            _fetch_enrichment(),
-            _fetch_free_models(),
+            self._scan_providers(),
+            self._fetch_enrichment(),
+            self._fetch_free_models(),
         )
 
-        # ------------------------------------------------------------------
-        # Phase 2: Enrich models with external data (fast, in-memory only)
-        # ------------------------------------------------------------------
-        enriched_count = 0
-        total_count = 0
-        if self._enrichment_source is not None and enrichment_data:
-            for pname, pdata in new_providers.items():
-                if not pdata.models:
-                    continue
-                enriched_models = []
-                for m in pdata.models:
-                    total_count += 1
-                    before_price = m.input_price
-                    enriched_m = self._enrichment_source.enrich(m, pname)
-                    if enriched_m.input_price != before_price or enriched_m.context_window is not None:
-                        enriched_count += 1
-                    enriched_models.append(enriched_m)
-                # Copy-on-write: create new RegistryProviderData
-                new_providers[pname] = RegistryProviderData(
-                    available=pdata.available,
-                    env_key=pdata.env_key,
-                    models=enriched_models,
-                )
-            log.info(
-                "enrichment_applied",
-                enriched=enriched_count,
-                total=total_count,
-            )
+        # Phase 2: Enrich with external metadata (fast, in-memory)
+        self._enrich_models(new_providers, enrichment_data)
 
-        # ------------------------------------------------------------------
-        # Phase 3: Merge free-provider public model data into unconfigured
-        # providers so the catalog can display model counts and names.
-        # ------------------------------------------------------------------
-        if free_data:
-            for fp_name, fp_data in free_data.items():
-                fp_pdata = new_providers.get(fp_name)
-                if fp_pdata is not None and not fp_pdata.available and fp_data.models:
-                    # Convert FreeModelEntry -> RegistryModelEntry, including
-                    # any capability metadata extracted from provider APIs.
-                    free_models = [
-                        RegistryModelEntry(
-                            id=fm.id,
-                            name=fm.name,
-                            vision=fm.vision,
-                            reasoning=fm.reasoning,
-                            supports_tool_use=fm.supports_tool_use,
-                            context_window=fm.context_length,
-                        )
-                        for fm in fp_data.models
-                    ]
-                    new_providers[fp_name] = RegistryProviderData(
-                        available=False,
-                        env_key=fp_pdata.env_key,
-                        models=free_models,
-                    )
-            log.info(
-                "free_provider_data_merged",
-                providers_with_models=sum(1 for fp in free_data.values() if fp.models),
-            )
+        # Phase 3: Merge free-provider public model data
+        self._merge_free_providers(new_providers, free_data)
 
-        # ------------------------------------------------------------------
-        # Phase 4: Apply static capability tags as FALLBACK.
-        # Providers that report capabilities via API (e.g. OpenRouter) have
-        # already set the flags above.  Static pattern-matching fills gaps
-        # for providers whose /models endpoint returns only id + created.
-        # ------------------------------------------------------------------
-        from mirai.agent.free_model_capabilities import enrich_capabilities
-
-        free_provider_names = {spec.name for spec in _build_provider_specs() if spec.signup_url}
-        for pname in free_provider_names:
-            cap_pdata = new_providers.get(pname)
-            if cap_pdata and cap_pdata.models:
-                for m in cap_pdata.models:
-                    enrich_capabilities(m)
+        # Phase 4: Apply static capability tags as fallback
+        self._apply_capability_tags(new_providers)
 
         # Atomic swap (copy-on-write)
         new_data = RegistryData(
@@ -435,6 +289,160 @@ class ModelRegistry:
         )
         self._data = new_data
         self._save()
+
+    async def _scan_providers(self) -> dict[str, RegistryProviderData]:
+        """Phase 1: Scan all provider specs and collect available models."""
+        result: dict[str, RegistryProviderData] = {}
+        all_specs = _build_provider_specs()
+        for spec in all_specs:
+            api_key = os.getenv(spec.env_key)
+            if not api_key:
+                existing = self._data.providers.get(spec.name)
+                result[spec.name] = RegistryProviderData(
+                    available=False,
+                    env_key=spec.env_key,
+                    models=existing.models if existing else [],
+                )
+                continue
+
+            try:
+                cls = _import_provider_class(spec.import_path)
+                if cls is None:
+                    continue
+
+                # Pass base_url and provider_name for free providers
+                init_kwargs: dict[str, Any] = {"api_key": api_key}
+                if spec.base_url:
+                    init_kwargs["base_url"] = spec.base_url
+                    init_kwargs["provider_name"] = spec.name
+                provider = cls(**init_kwargs)
+                raw_models = await provider.list_models()
+                models = [RegistryModelEntry.from_model_info(m) for m in raw_models]
+                result[spec.name] = RegistryProviderData(
+                    available=True,
+                    env_key=spec.env_key,
+                    models=models,
+                )
+                log.info("registry_provider_refreshed", provider=spec.name, model_count=len(models))
+            except Exception as exc:
+                log.warning("registry_refresh_failed", provider=spec.name, error=str(exc))
+                existing = self._data.providers.get(spec.name)
+                result[spec.name] = (
+                    existing
+                    if existing
+                    else RegistryProviderData(
+                        available=False,
+                        env_key=spec.env_key,
+                        models=[],
+                    )
+                )
+        return result
+
+    async def _fetch_enrichment(self) -> dict[str, Any]:
+        """Fetch external enrichment data (e.g. models.dev pricing)."""
+        if self._enrichment_source is None:
+            return {}
+        try:
+            return await asyncio.wait_for(
+                self._enrichment_source.fetch(),
+                timeout=20,
+            )
+        except TimeoutError:
+            log.warning("enrichment_fetch_timeout")
+            return {}
+        except Exception as exc:
+            log.warning("enrichment_fetch_failed", error=str(exc))
+            return {}
+
+    async def _fetch_free_models(self) -> dict[str, FreeProviderData]:
+        """Fetch public model catalogs from free provider sources."""
+        if self._free_source is None:
+            return {}
+        try:
+            return await asyncio.wait_for(
+                self._free_source.fetch(),
+                timeout=20,
+            )
+        except TimeoutError:
+            log.warning("free_provider_fetch_timeout")
+            return {}
+        except Exception as exc:
+            log.warning("free_provider_fetch_failed", error=str(exc))
+            return {}
+
+    def _enrich_models(
+        self,
+        providers: dict[str, RegistryProviderData],
+        enrichment_data: dict[str, Any],
+    ) -> None:
+        """Phase 2: Enrich discovered models with external metadata."""
+        if self._enrichment_source is None or not enrichment_data:
+            return
+
+        enriched_count = 0
+        total_count = 0
+        for pname, pdata in providers.items():
+            if not pdata.models:
+                continue
+            enriched_models = []
+            for m in pdata.models:
+                total_count += 1
+                before_price = m.input_price
+                enriched_m = self._enrichment_source.enrich(m, pname)
+                if enriched_m.input_price != before_price or enriched_m.context_window is not None:
+                    enriched_count += 1
+                enriched_models.append(enriched_m)
+            # Copy-on-write: create new RegistryProviderData
+            providers[pname] = RegistryProviderData(
+                available=pdata.available,
+                env_key=pdata.env_key,
+                models=enriched_models,
+            )
+        log.info("enrichment_applied", enriched=enriched_count, total=total_count)
+
+    def _merge_free_providers(
+        self,
+        providers: dict[str, RegistryProviderData],
+        free_data: dict[str, FreeProviderData],
+    ) -> None:
+        """Phase 3: Merge free-provider public model data into unconfigured providers."""
+        if not free_data:
+            return
+
+        for fp_name, fp_data in free_data.items():
+            fp_pdata = providers.get(fp_name)
+            if fp_pdata is not None and not fp_pdata.available and fp_data.models:
+                free_models = [
+                    RegistryModelEntry(
+                        id=fm.id,
+                        name=fm.name,
+                        vision=fm.vision,
+                        reasoning=fm.reasoning,
+                        supports_tool_use=fm.supports_tool_use,
+                        context_window=fm.context_length,
+                    )
+                    for fm in fp_data.models
+                ]
+                providers[fp_name] = RegistryProviderData(
+                    available=False,
+                    env_key=fp_pdata.env_key,
+                    models=free_models,
+                )
+        log.info(
+            "free_provider_data_merged",
+            providers_with_models=sum(1 for fp in free_data.values() if fp.models),
+        )
+
+    def _apply_capability_tags(self, providers: dict[str, RegistryProviderData]) -> None:
+        """Phase 4: Apply static capability tags as fallback for providers without API metadata."""
+        from mirai.agent.free_model_capabilities import enrich_capabilities
+
+        free_provider_names = {spec.name for spec in _build_provider_specs() if spec.signup_url}
+        for pname in free_provider_names:
+            cap_pdata = providers.get(pname)
+            if cap_pdata and cap_pdata.models:
+                for m in cap_pdata.models:
+                    enrich_capabilities(m)
 
     # ------------------------------------------------------------------
     # Read (non-blocking, in-memory)

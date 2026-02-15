@@ -37,6 +37,20 @@ jobs:
       - name: mypy
         run: uv run mypy mirai/
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --dev
+      - name: Bandit security scan
+        run: uv run bandit -r mirai/ -c pyproject.toml -q
+
   test:
     runs-on: ubuntu-latest
     steps:

@@ -40,6 +40,8 @@ dev = [
     "ruff>=0.11.0",
     "mypy>=1.15.0",
     "pytest-cov>=6.0.0",
+    "bandit>=1.7.0",
+    "hypothesis>=6.0.0",
 ]
 
 [tool.ruff]
@@ -114,3 +116,7 @@ search_path = [
     ".",
     ".venv/lib/python3.11/site-packages",
 ]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101", "B603", "B607"]

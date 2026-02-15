@@ -268,6 +268,94 @@ class AgentLoop:
         self.state = next_state
         log.info("loop_state_transition", prev=prev.value, next=next_state.value)
 
+    async def _call_with_fallback(
+        self,
+        model: str,
+        full_system_prompt: str,
+        messages: list[dict[str, Any]],
+        tool_definitions: list[dict[str, Any]],
+    ) -> ProviderResponse:
+        """Call the LLM with automatic fallback through the model chain.
+
+        Tries the primary model first, then each fallback model with
+        exponential backoff. Raises ``ProviderError`` if all fail.
+        """
+        tracer = get_tracer()
+        response: ProviderResponse | None = None
+        models_to_try = [model] + [m for m in self.fallback_models if m != model]
+        last_error: Exception | None = None
+
+        for attempt_idx, attempt_model in enumerate(models_to_try):
+            if attempt_idx > 0:
+                self._transition(LoopState.RECOVERING)
+                backoff = min(0.5 * attempt_idx, 5.0)
+                log.info("fallback_backoff", seconds=backoff, attempt=attempt_idx)
+                await asyncio.sleep(backoff)
+                self._transition(LoopState.THINKING)
+            try:
+                loop_config: dict[str, Any] = {**self.provider.config_dict(), **self.runtime_overrides}
+                with tracer.start_as_current_span("agent.llm_call"):
+                    response = await self.provider.generate_response(
+                        model=cast(str, attempt_model),
+                        system=full_system_prompt,
+                        messages=messages,
+                        tools=tool_definitions,
+                        **loop_config,
+                    )
+                if attempt_model != model:
+                    log.info("fallback_model_succeeded", model=attempt_model)
+                break
+            except Exception as exc:
+                last_error = exc
+                log.warning(
+                    "model_call_failed",
+                    model=attempt_model,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
+                )
+
+        if response is None:
+            self._transition(LoopState.DONE)
+            if last_error is not None:
+                raise ProviderError(f"All models in fallback chain failed: {last_error}") from last_error
+            raise ProviderError("All models in fallback chain failed")
+        return response
+
+    @staticmethod
+    def _build_assistant_message(
+        response: ProviderResponse,
+    ) -> tuple[list[str], list[ToolUseBlock], dict[str, Any]]:
+        """Parse LLM response into text parts, tool calls, and an assistant message."""
+        text_parts: list[str] = []
+        tool_calls: list[ToolUseBlock] = []
+
+        for block in response.content:
+            if isinstance(block, TextBlock) and block.text:
+                text_parts.append(block.text)
+            elif isinstance(block, ToolUseBlock):
+                tool_calls.append(block)
+
+        assistant_msg: dict[str, Any] = {"role": "assistant"}
+        assistant_msg["content"] = "".join(text_parts) if text_parts else None
+        if tool_calls:
+            tc_list = []
+            for tc in tool_calls:
+                tc_dict: dict[str, Any] = {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.input),
+                    },
+                }
+                if getattr(tc, "thought_signature", None):
+                    tc_dict["thought_signature"] = tc.thought_signature
+                tc_list.append(tc_dict)
+            assistant_msg["tool_calls"] = tc_list
+
+        return text_parts, tool_calls, assistant_msg
+
     async def _execute_cycle(
         self,
         message: str | list[dict[str, Any]],
@@ -316,86 +404,23 @@ class AgentLoop:
                     log.warning("max_tool_rounds_reached", rounds=MAX_TOOL_ROUNDS)
                     break
 
-                with tracer.start_as_current_span("agent.act"):
-                    log.info(
-                        "llm_request",
-                        tools_count=len(tool_definitions),
-                        tool_names=[t["name"] for t in tool_definitions],
-                        round=tool_round,
-                    )
-                    # Attempt primary model, then fallback chain on failure
-                    response: ProviderResponse | None = None
-                    models_to_try = [model] + [m for m in self.fallback_models if m != model]
-                    last_error: Exception | None = None
-                    for attempt_idx, attempt_model in enumerate(models_to_try):
-                        if attempt_idx > 0:
-                            self._transition(LoopState.RECOVERING)
-                            backoff = min(0.5 * attempt_idx, 5.0)
-                            log.info("fallback_backoff", seconds=backoff, attempt=attempt_idx)
-                            await asyncio.sleep(backoff)
-                            self._transition(LoopState.THINKING)
-                        try:
-                            # Prepare config with overrides
-                            loop_config: dict[str, Any] = {**self.provider.config_dict(), **self.runtime_overrides}
-                            response = await self.provider.generate_response(
-                                model=cast(str, attempt_model),
-                                system=full_system_prompt,
-                                messages=messages,
-                                tools=tool_definitions,
-                                **loop_config,
-                            )
-                            if attempt_model != model:
-                                log.info("fallback_model_succeeded", model=attempt_model)
-                            break
-                        except Exception as exc:
-                            last_error = exc
-                            log.warning(
-                                "model_call_failed",
-                                model=attempt_model,
-                                error=str(exc),
-                                error_type=type(exc).__name__,
-                                remaining_fallbacks=len(models_to_try) - models_to_try.index(attempt_model) - 1,
-                            )
-                    if response is None:
-                        self._transition(LoopState.DONE)
-                        if last_error is not None:
-                            raise ProviderError(f"All models in fallback chain failed: {last_error}") from last_error
-                        raise ProviderError("All models in fallback chain failed")
-                    log.info(
-                        "llm_response",
-                        stop_reason=response.stop_reason,
-                        content_blocks=len(response.content),
-                        block_types=[type(b).__name__ for b in response.content],
-                    )
+                log.info(
+                    "llm_request",
+                    tools_count=len(tool_definitions),
+                    tool_names=[t["name"] for t in tool_definitions],
+                    round=tool_round,
+                )
 
-                # Parse assistant response
-                text_parts: list[str] = []
-                tool_calls: list[ToolUseBlock] = []
+                response = await self._call_with_fallback(model, full_system_prompt, messages, tool_definitions)
 
-                for block in response.content:
-                    if isinstance(block, TextBlock) and block.text:
-                        text_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        tool_calls.append(block)
+                log.info(
+                    "llm_response",
+                    stop_reason=response.stop_reason,
+                    content_blocks=len(response.content),
+                    block_types=[type(b).__name__ for b in response.content],
+                )
 
-                # Build the assistant message in OpenAI format
-                assistant_msg: dict[str, Any] = {"role": "assistant"}
-                assistant_msg["content"] = "".join(text_parts) if text_parts else None
-                if tool_calls:
-                    tc_list = []
-                    for tc in tool_calls:
-                        tc_dict: dict[str, Any] = {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": json.dumps(tc.input),
-                            },
-                        }
-                        if getattr(tc, "thought_signature", None):
-                            tc_dict["thought_signature"] = tc.thought_signature
-                        tc_list.append(tc_dict)
-                    assistant_msg["tool_calls"] = tc_list
+                text_parts, tool_calls, assistant_msg = self._build_assistant_message(response)
                 messages.append(assistant_msg)
 
                 # Execute tools if present
