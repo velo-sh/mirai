@@ -62,5 +62,37 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --dev
-      - name: Run tests
-        run: uv run pytest tests/ -x -q --cov=mirai --cov-report=term-missing
+      - name: Run tests with coverage
+        run: uv run pytest tests/ -x -q --cov=mirai --cov-report=term-missing --cov-fail-under=80
+
+  complexity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --dev
+      - name: Radon cyclomatic complexity
+        run: |
+          uv run radon cc mirai/ -a -nc
+          # Fail if any function has CC > 10 (C grade or worse)
+          RESULT=$(uv run radon cc mirai/ -nc -j | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          violations = []
+          for path, funcs in data.items():
+              for f in funcs:
+                  if f['complexity'] > 10:
+                      violations.append(f'{path}:{f[\"lineno\"]} {f[\"name\"]} CC={f[\"complexity\"]}')
+          if violations:
+              print('Functions exceeding CC=10:')
+              for v in violations:
+                  print(f'  {v}')
+              sys.exit(1)
+          print('All functions within complexity threshold (CC ≤ 10)')
+          ")
+
