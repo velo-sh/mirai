@@ -187,25 +187,23 @@ class TestSerializeToml:
 # ---------------------------------------------------------------------------
 
 
-class _FakeProvider(AntigravityProvider):
-    """Minimal provider with credentials for testing _usage.
+def _make_fake_provider(credentials: dict | None = None) -> AntigravityProvider:
+    """Create a mock AntigravityProvider with fake credentials.
 
-    Subclasses AntigravityProvider so isinstance() checks pass,
-    but bypasses the real __init__ to avoid credential loading.
+    Uses MagicMock(spec=...) so isinstance() checks pass and the mock
+    automatically tracks protocol changes in AntigravityProvider.
     """
+    from unittest.mock import MagicMock
 
-    def __init__(self, credentials: dict | None = None):
-        # Skip AntigravityProvider.__init__ — set only what tests need.
-        self.credentials = credentials or {
-            "access": "fake-token-123",
-            "refresh": "fake-refresh",
-            "expires": 9999999999,
-            "project_id": "test-project",
-            "email": "test@example.com",
-        }
-
-    async def _ensure_fresh_token(self):
-        pass
+    provider = MagicMock(spec=AntigravityProvider)
+    provider.credentials = credentials or {
+        "access": "fake-token-123",
+        "refresh": "fake-refresh",
+        "expires": 9999999999,
+        "project_id": "test-project",
+        "email": "test@example.com",
+    }
+    return provider
 
 
 class TestSystemToolUsage:
@@ -222,7 +220,7 @@ class TestSystemToolUsage:
                 {"id": "gemini-2.5-flash", "used_pct": 0.0, "reset_time": None},
             ],
         }
-        provider = _FakeProvider()
+        provider = _make_fake_provider()
         tool = SystemTool(config=_FakeConfig(), provider=provider)
 
         with patch("mirai.agent.tools.system.fetch_usage", return_value=fake_usage):
@@ -249,7 +247,7 @@ class TestSystemToolUsage:
     @pytest.mark.asyncio
     async def test_usage_empty_token(self):
         """Should return error when access token is empty."""
-        provider = _FakeProvider(credentials={"access": "", "project_id": "p"})
+        provider = _make_fake_provider(credentials={"access": "", "project_id": "p"})
         tool = SystemTool(config=_FakeConfig(), provider=provider)
         result = await tool.execute(action="usage")
         assert "Error" in result
@@ -258,7 +256,7 @@ class TestSystemToolUsage:
     @pytest.mark.asyncio
     async def test_usage_fetch_error(self):
         """Should return error message when fetch_usage throws."""
-        provider = _FakeProvider()
+        provider = _make_fake_provider()
         tool = SystemTool(config=_FakeConfig(), provider=provider)
 
         with patch("mirai.agent.tools.system.fetch_usage", side_effect=Exception("network timeout")):

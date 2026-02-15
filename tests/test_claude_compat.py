@@ -62,22 +62,24 @@ class TestToolCallConversion:
 
     def test_tool_call_basic(self):
         """tool_calls should convert to functionCall parts."""
-        result = _convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_abc123",
-                        "type": "function",
-                        "function": {
-                            "name": "echo",
-                            "arguments": json.dumps({"text": "hello"}),
-                        },
-                    }
-                ],
-            }
-        ])
+        result = _convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "echo",
+                                "arguments": json.dumps({"text": "hello"}),
+                            },
+                        }
+                    ],
+                }
+            ]
+        )
         assert len(result) == 1
         fc = result[0]["parts"][0]["functionCall"]
         assert fc["id"] == "call_abc123"
@@ -86,19 +88,21 @@ class TestToolCallConversion:
 
     def test_tool_call_with_text(self):
         """Non-empty text + tool_calls should both be preserved."""
-        result = _convert([
-            {
-                "role": "assistant",
-                "content": "Let me check that.",
-                "tool_calls": [
-                    {
-                        "id": "call_002",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"text": "test"}'},
-                    }
-                ],
-            }
-        ])
+        result = _convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Let me check that.",
+                    "tool_calls": [
+                        {
+                            "id": "call_002",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"text": "test"}'},
+                        }
+                    ],
+                }
+            ]
+        )
         parts = result[0]["parts"]
         assert len(parts) == 2
         assert parts[0] == {"text": "Let me check that."}
@@ -106,19 +110,21 @@ class TestToolCallConversion:
 
     def test_tool_call_with_empty_text(self):
         """Empty text alongside tool_calls should be filtered."""
-        result = _convert([
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_001",
-                        "type": "function",
-                        "function": {"name": "mirai_system", "arguments": '{"action": "status"}'},
-                    }
-                ],
-            }
-        ])
+        result = _convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_001",
+                            "type": "function",
+                            "function": {"name": "mirai_system", "arguments": '{"action": "status"}'},
+                        }
+                    ],
+                }
+            ]
+        )
         parts = result[0]["parts"]
         # Empty text should be filtered — only tool_call remains
         assert len(parts) == 1
@@ -127,16 +133,26 @@ class TestToolCallConversion:
 
     def test_multiple_tool_calls(self):
         """Multiple tool calls in one message should each be converted."""
-        result = _convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "echo", "arguments": '{"text": "a"}'}},
-                    {"id": "call_2", "type": "function", "function": {"name": "echo", "arguments": '{"text": "b"}'}},
-                ],
-            }
-        ])
+        result = _convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"text": "a"}'},
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"text": "b"}'},
+                        },
+                    ],
+                }
+            ]
+        )
         parts = result[0]["parts"]
         assert len(parts) == 2
         assert parts[0]["functionCall"]["id"] == "call_1"
@@ -144,20 +160,22 @@ class TestToolCallConversion:
 
     def test_thought_signature_preserved(self):
         """thought_signature should be preserved on the functionCall part."""
-        result = _convert([
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_xyz",
-                        "type": "function",
-                        "function": {"name": "status", "arguments": "{}"},
-                        "thought_signature": "sig_abc",
-                    }
-                ],
-            }
-        ])
+        result = _convert(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_xyz",
+                            "type": "function",
+                            "function": {"name": "status", "arguments": "{}"},
+                            "thought_signature": "sig_abc",
+                        }
+                    ],
+                }
+            ]
+        )
         part = result[0]["parts"][0]
         assert part["functionCall"]["id"] == "call_xyz"
         assert part["thoughtSignature"] == "sig_abc"
@@ -171,9 +189,7 @@ class TestToolResultConversion:
 
     def test_tool_result_basic(self):
         """role=tool with tool_call_id → functionResponse."""
-        result = _convert([
-            {"role": "tool", "tool_call_id": "call_abc123", "content": "Tool output here"}
-        ])
+        result = _convert([{"role": "tool", "tool_call_id": "call_abc123", "content": "Tool output here"}])
         fr = result[0]["parts"][0]["functionResponse"]
         assert fr["id"] == "call_abc123"
         assert fr["name"] == "call_abc123"
@@ -181,9 +197,7 @@ class TestToolResultConversion:
 
     def test_tool_result_maps_to_user_role(self):
         """Tool results should map to 'user' role in Gemini format."""
-        result = _convert([
-            {"role": "tool", "tool_call_id": "call_1", "content": "result"}
-        ])
+        result = _convert([{"role": "tool", "tool_call_id": "call_1", "content": "result"}])
         assert result[0]["role"] == "user"
 
 
@@ -256,16 +270,10 @@ class TestFailoverMarking:
     @pytest.mark.asyncio
     async def test_model_marked_exhausted_on_429(self):
         """QuotaManager should mark model at 100% after 429."""
-        import asyncio
-        import time
 
         from mirai.agent.providers import QuotaManager
 
-        qm = QuotaManager.__new__(QuotaManager)
-        qm._quotas = {"model-a": 50.0, "model-b": 0.0}
-        qm._last_update = time.time()  # Prevent network refresh
-        qm._lock = asyncio.Lock()
-        qm.credentials = {}
+        qm = QuotaManager.for_testing(quotas={"model-a": 50.0, "model-b": 0.0})
 
         # Simulate marking (what happens on 429)
         qm._quotas["model-a"] = 100.0
@@ -275,20 +283,16 @@ class TestFailoverMarking:
     @pytest.mark.asyncio
     async def test_is_available_threshold(self):
         """Models at 100% should not be available."""
-        import asyncio
-        import time
 
         from mirai.agent.providers import QuotaManager
 
-        qm = QuotaManager.__new__(QuotaManager)
-        qm._quotas = {
-            "gemini-3-flash": 100.0,
-            "claude-sonnet": 20.0,
-            "gemini-2.5-flash": 0.0,
-        }
-        qm._last_update = time.time()
-        qm._lock = asyncio.Lock()
-        qm.credentials = {}
+        qm = QuotaManager.for_testing(
+            quotas={
+                "gemini-3-flash": 100.0,
+                "claude-sonnet": 20.0,
+                "gemini-2.5-flash": 0.0,
+            }
+        )
 
         assert not await qm.is_available("gemini-3-flash")
         assert await qm.is_available("claude-sonnet")

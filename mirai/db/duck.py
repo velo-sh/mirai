@@ -34,6 +34,23 @@ class DuckDBStorage:
         self._lock = threading.Lock()
         self._init_schema()
 
+    @classmethod
+    def for_testing(
+        cls,
+        *,
+        conn: duckdb.DuckDBPyConnection | None = None,
+    ) -> "DuckDBStorage":
+        """Create a DuckDBStorage for testing without opening a database file.
+
+        Useful for testing error paths (e.g. ``conn=None`` → ``_check_conn``
+        raises ``StorageError``).
+        """
+        storage = cls.__new__(cls)
+        storage.db_path = ":testing:"
+        storage.conn = conn
+        storage._lock = threading.Lock()
+        return storage
+
     def close(self):
         """Close the DuckDB connection and release the file lock."""
         if self.conn:
