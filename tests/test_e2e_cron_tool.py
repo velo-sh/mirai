@@ -42,7 +42,7 @@ def _make_tool(tmp_path: Path, system_jobs: list | None = None, agent_jobs: list
     _save_json5_atomic(state_dir / "system.json5", {"version": 1, "jobs": system_jobs or []})
     _save_json5_atomic(state_dir / "jobs.json5", {"version": 1, "jobs": agent_jobs or []})
 
-    sched = CronScheduler(state_dir=state_dir, agent=None, im_provider=None)
+    sched = CronScheduler(state_dir=state_dir, agent=None)
     sched._load_stores()
 
     ctx = ToolContext(
