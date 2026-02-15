@@ -136,7 +136,7 @@ class AnthropicProvider:
             }
             response = await self.client.messages.create(**request_params)  # type: ignore[arg-type]
 
-            if hasattr(response, "usage") and response.usage:
+            if response.usage:
                 span.set_attribute("llm.usage.prompt_tokens", response.usage.input_tokens)
                 span.set_attribute("llm.usage.completion_tokens", response.usage.output_tokens)
                 span.set_attribute("llm.usage.total_tokens", response.usage.input_tokens + response.usage.output_tokens)

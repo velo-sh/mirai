@@ -29,11 +29,7 @@ class AgentDreamer(BaseBackgroundService):
 
         # 1. Fetch recent thinking traces
         traces = await self.storage.get_recent_traces(self.agent.collaborator_id, limit=20)
-        thinking_blocks = [
-            (t["content"] if isinstance(t, dict) else t.content)
-            for t in traces
-            if (t.get("trace_type") if isinstance(t, dict) else getattr(t, "trace_type", "")) == "thinking"
-        ]
+        thinking_blocks = [t.content for t in traces if t.trace_type == "thinking"]
 
         if not thinking_blocks:
             log.info("dream_skipped_no_thinking_traces")
@@ -65,7 +61,7 @@ class AgentDreamer(BaseBackgroundService):
             # Use direct provider call for reflection to bypass memory injection/archive logic
             # This is a meta-operation.
             response: ProviderResponse = await self.agent.provider.generate_response(
-                model=getattr(self.agent.provider, "model", "gemini-3-flash"),
+                model=self.agent.provider.model,
                 system="You are an AI performing a self-reflection and identity evolution cycle. Output only the new SOUL.md content.",
                 messages=[{"role": "user", "content": reflection_prompt}],
                 tools=[],

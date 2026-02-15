@@ -205,7 +205,7 @@ class OpenAIProvider:
                     self._raise_daily_limit_error()
                 raise  # transient 429 → let tenacity retry
 
-            if hasattr(response, "usage") and response.usage:
+            if response.usage:
                 span.set_attribute("llm.usage.prompt_tokens", response.usage.prompt_tokens)
                 span.set_attribute("llm.usage.completion_tokens", response.usage.completion_tokens)
                 span.set_attribute("llm.usage.total_tokens", response.usage.total_tokens)

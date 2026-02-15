@@ -5,7 +5,10 @@ import os
 import signal
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mirai.agent.tools.base import ToolContext
 
 from mirai import integrations
 from mirai.agent.agent_dreamer import AgentDreamer
@@ -82,6 +85,8 @@ class MiraiApp:
         self.config: MiraiConfig | None = None
         self.start_time: float = time.monotonic()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._im_provider: Any = None
+        self._tool_context: ToolContext | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle: public entry points
@@ -102,10 +107,10 @@ class MiraiApp:
             self.cron.agent = self.agent
         await self._init_integrations()
         # Wire im_provider into tools and cron (for curator alerts)
-        if hasattr(self, "_im_provider") and self._im_provider:
+        if self._im_provider:
             if self.cron:
                 self.cron.im_provider = self._im_provider
-            if hasattr(self, "_tool_context"):
+            if self._tool_context:
                 self._tool_context.im_provider = self._im_provider
         self._init_background_tasks()
 
@@ -131,7 +136,7 @@ class MiraiApp:
         if self.heartbeat:
             await self.heartbeat.stop()
 
-        if self.agent and hasattr(self.agent, "l3_storage") and self.agent.l3_storage:
+        if self.agent and self.agent.l3_storage:
             try:
                 self.agent.l3_storage.close()
             except Exception:
@@ -238,7 +243,7 @@ class MiraiApp:
                 config=config,
                 registry=self.registry,
                 provider=provider,
-                cron_scheduler=getattr(self, "cron", None),
+                cron_scheduler=self.cron,
                 start_time=self.start_time,
             )
 

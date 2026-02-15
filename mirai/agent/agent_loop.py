@@ -128,10 +128,10 @@ class AgentLoop:
 
         Takes effect on the next ``generate_response()`` call.
         """
-        old_name = getattr(self.provider, "provider_name", "unknown")
-        new_name = getattr(new_provider, "provider_name", "unknown")
+        old_name = self.provider.provider_name
+        new_name = new_provider.provider_name
         self.provider = new_provider
-        log.info("provider_swapped", old=old_name, new=new_name, model=getattr(new_provider, "model", "unknown"))
+        log.info("provider_swapped", old=old_name, new=new_name, model=new_provider.model)
 
         # Identity attributes (to be loaded)
         self.name = ""
@@ -253,7 +253,7 @@ class AgentLoop:
             if history:
                 span.set_attribute("history.turns", len(history))
 
-            model = model or getattr(self.provider, "model", "claude-sonnet-4-20250514")
+            model = model or self.provider.model
 
             # Archive inbound message
             await self._archive_trace(str(message), "message", {"role": "user"})
