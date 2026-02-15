@@ -315,7 +315,7 @@ async def ensure_valid_credentials() -> dict:
     return creds
 
 
-async def login() -> dict:
+async def login(auth_config: "AuthConfig | None" = None) -> dict:
     """
     Run the full OAuth PKCE login flow:
     1. Start local callback server on :51121
@@ -325,7 +325,10 @@ async def login() -> dict:
     5. Fetch projectId and email
     6. Save credentials to disk
     """
-    cfg = _get_auth_config()
+    cfg = auth_config or _get_auth_config()
+
+    if not cfg.client_id or not cfg.client_secret:
+        raise ValueError("OAuth client_id and client_secret are required. Run: python -m mirai.auth.auth_cli login")
     verifier, challenge = _generate_pkce()
     state = secrets.token_hex(16)
     auth_url = _build_auth_url(challenge, state, auth_config=cfg)
